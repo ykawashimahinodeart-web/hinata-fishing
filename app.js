@@ -137,8 +137,9 @@ async function setupSharing(){
   const linkedRoom=hashParams.get('room')||url.searchParams.get('room');
   let savedRoom=null;
   try{savedRoom=localStorage.getItem(ROOM_STORAGE_KEY);}catch{}
-  const initialRoom=validRoomId(linkedRoom)?linkedRoom:(validRoomId(savedRoom)?savedRoom:null);
-  if(initialRoom){await activateRoom(initialRoom);return;}
+  const hasLinkedRoom=validRoomId(linkedRoom);
+  const initialRoom=hasLinkedRoom?linkedRoom:(validRoomId(savedRoom)?savedRoom:null);
+  if(initialRoom){await activateRoom(initialRoom,{updateAddress:!hasLinkedRoom});return;}
 
   // Do not silently create a fresh room. In iOS, the installed app's manifest
   // start_url commonly omits the #room fragment used by Safari share links.
@@ -148,11 +149,11 @@ async function setupSharing(){
   if(SUPABASE_URL&&SUPABASE_ANON_KEY&&window.supabase)client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
   else {try{spots=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]');}catch{spots=[];}renderSpots();}
 }
-async function activateRoom(id){
+async function activateRoom(id,{updateAddress=true}={}){
   if(!validRoomId(id))return false;
   roomId=id;
   try{localStorage.setItem(ROOM_STORAGE_KEY,id);}catch{}
-  setRoomInAddress(id);
+  if(updateAddress)setRoomInAddress(id);
   if(SUPABASE_URL&&SUPABASE_ANON_KEY&&window.supabase){
     client=client||window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
     $('shareStatus').classList.add('connected');
@@ -171,7 +172,7 @@ async function loadSharedSpots(){if(!client||!roomId)return;const {data,error}=a
 
 async function copyShareLink(){if(!roomId){$('roomError').textContent='共有ルームが未選択です。Safariの共有リンクを貼り付けて参加してください。';if(!$('roomDialog').open)$('roomDialog').showModal();return;}try{await navigator.clipboard.writeText(location.href);$('copyLinkButton').textContent='コピーしました';setTimeout(()=>$('copyLinkButton').textContent='共有リンク',1800);}catch{showInfo('共有リンク',location.href);}}
 function showInfo(title,body){$('infoTitle').textContent=title;$('infoBody').textContent=body;$('infoDialog').showModal();}
-function bindUI(){ $('saveSpotButton').addEventListener('click',()=>{if(!roomId){$('roomDialog').showModal();return;}if(currentPosition)openSpotDialog([currentPosition.lat,currentPosition.lon]);else if(pendingCoords)openSpotDialog(pendingCoords);else showInfo('地点を選択','まず現在地を取得するか、地図をタップしてください。');}); $('confirmSave').addEventListener('click',async(e)=>{e.preventDefault();const name=$('spotName').value.trim();if(!name)return;await saveSpot(name,pendingCoords);$('spotDialog').close();}); $('locateButton').addEventListener('click',locate); $('shareButton').addEventListener('click',copyShareLink); $('copyLinkButton').addEventListener('click',copyShareLink); $('roomForm').addEventListener('submit',async(e)=>{e.preventDefault();const id=roomIdFromInput($('roomLinkInput').value);if(!id){$('roomError').textContent='有効な共有リンクまたはルームIDを確認してください。';return;}$('roomError').textContent='';$('roomDialog').close();await activateRoom(id,{fromLink:true});}); $('roomLaterButton').addEventListener('click',()=>$('roomDialog').close()); $('mapNav').addEventListener('click',()=>$('map').scrollIntoView({behavior:'smooth'})); $('helpButton').addEventListener('click',()=>showInfo('使い方','「ココを保存」で現在地を登録できます。地図をタップするとその地点を登録できます。共有リンクを知っている人は、同じ釣り場マップを開いてポイントを追加・削除できます。共有リンクは二人の間だけで扱ってください。天気・海況データはOpen-Meteoを使用します。潮汐情報はこの版では表示しません。')); }
+function bindUI(){ $('saveSpotButton').addEventListener('click',()=>{if(!roomId){$('roomDialog').showModal();return;}if(currentPosition)openSpotDialog([currentPosition.lat,currentPosition.lon]);else if(pendingCoords)openSpotDialog(pendingCoords);else showInfo('地点を選択','まず現在地を取得するか、地図をタップしてください。');}); $('confirmSave').addEventListener('click',async(e)=>{e.preventDefault();const name=$('spotName').value.trim();if(!name)return;await saveSpot(name,pendingCoords);$('spotDialog').close();}); $('locateButton').addEventListener('click',locate); $('shareButton').addEventListener('click',copyShareLink); $('copyLinkButton').addEventListener('click',copyShareLink); $('roomForm').addEventListener('submit',async(e)=>{e.preventDefault();const id=roomIdFromInput($('roomLinkInput').value);if(!id){$('roomError').textContent='有効な共有リンクまたはルームIDを確認してください。';return;}$('roomError').textContent='';$('roomDialog').close();await activateRoom(id);}); $('roomLaterButton').addEventListener('click',()=>$('roomDialog').close()); $('mapNav').addEventListener('click',()=>$('map').scrollIntoView({behavior:'smooth'})); $('helpButton').addEventListener('click',()=>showInfo('使い方','「ココを保存」で現在地を登録できます。地図をタップするとその地点を登録できます。共有リンクを知っている人は、同じ釣り場マップを開いてポイントを追加・削除できます。共有リンクは二人の間だけで扱ってください。天気・海況データはOpen-Meteoを使用します。潮汐情報はこの版では表示しません。')); }
 
 async function start(){initMap();bindUI();await setupSharing();locate();navigator.serviceWorker?.register('./sw.js').catch(()=>{});refreshTimer=setInterval(()=>{const p=currentPosition;if(p)loadWeather(p.lat,p.lon);},30*60*1000);}
 document.addEventListener('DOMContentLoaded',start);
