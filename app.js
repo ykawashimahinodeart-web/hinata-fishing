@@ -2,6 +2,9 @@
 const SUPABASE_URL = window.HINATA_SUPABASE?.url || '';
 const SUPABASE_ANON_KEY = window.HINATA_SUPABASE?.anonKey || '';
 const STORAGE_KEY = 'hinata-fishing-spots-v1';
+// Keep a normal document base as a first-load fallback. On later launches the
+// service worker scope is authoritative, even if a shared link has a path suffix.
+const APP_BASE_URL = new URL('.', document.currentScript?.src || location.href);
 // Stored separately from spot data. Safari and an installed iOS PWA may have
 // separate storage, so a missing value must lead to an invite prompt, not a new room.
 const ROOM_STORAGE_KEY = 'hinata-fishing-room-v1';
@@ -24,13 +27,16 @@ function setTideStatus(message) { $('tideStatus').textContent = message; }
 
 async function getTideYear(year) {
   if (!tideYearCache.has(year)) {
-    const request = fetch(`./data/tides/miyazu-${year}.json`, { cache:'no-cache' }).then(response => {
+    const request = (async () => {
+      const registration = await navigator.serviceWorker?.getRegistration().catch(() => null);
+      const appBase = registration?.scope || APP_BASE_URL;
+      const dataUrl = new URL(`data/tides/miyazu-${year}.json`, appBase);
+      const response = await fetch(dataUrl, { cache:'no-cache' });
       if (!response.ok) throw new Error('tide data unavailable');
-      return response.json();
-    }).then(data => {
+      const data = await response.json();
       if (data.stationCode !== TIDE_STATION.code || data.year !== year || !Array.isArray(data.days)) throw new Error('invalid tide data');
       return data;
-    }).catch(error => { tideYearCache.delete(year); throw error; });
+    })().catch(error => { tideYearCache.delete(year); throw error; });
     tideYearCache.set(year, request);
   }
   return tideYearCache.get(year);
