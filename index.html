@@ -6,7 +6,7 @@
   <link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://api.open-meteo.com"><link rel="preconnect" href="https://marine-api.open-meteo.com"><link rel="preconnect" href="https://tile.openstreetmap.org">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
-  <link rel="stylesheet" href="styles.css"><title>HINATA FISHING</title>
+  <link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="depth.css"><title>HINATA FISHING</title>
 </head>
 <body>
   <header class="topbar"><div class="brand"><span class="brand-mark">☀</span><div><strong>HINATA <i>FISHING</i></strong><small>仲間とつくる釣りマップ</small></div></div><button id="shareButton" class="icon-button" aria-label="共有">↗</button></header>
@@ -26,6 +26,21 @@
       <div class="spot-list" id="spotList"></div>
       <p class="attribution">地図 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors · 天気・海況 <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a> · 潮汐 <a href="https://www.jma.go.jp/jma/kishou/info/coment.html" target="_blank" rel="noreferrer">気象庁データを加工して作成</a></p>
     </section>
+    <section class="depth-section" aria-labelledby="depthHeading">
+      <div class="depth-heading"><div><div class="section-kicker">HINATA DEPTH</div><h2 id="depthHeading">海底断面デモ</h2></div><span class="depth-sample-badge">サンプル</span></div>
+      <p class="depth-warning">サンプル地形・実際の水深ではありません</p>
+      <p class="depth-intro">地図で100mの投げる方向を決められます。現在、実際の水深データはありません。地図の線と下のサンプル地形は連動していません。</p>
+      <label class="depth-field-label" for="depthSpotSelect">キャスト開始地点</label>
+      <select id="depthSpotSelect" class="depth-select"><option value="">登録済みポイントから選択</option></select>
+      <div class="depth-action-row"><button id="depthPickButton" class="depth-action">地図で開始地点を選ぶ</button><button id="depthUseLocationButton" class="depth-action">現在地を使う</button></div>
+      <div class="depth-bearing-row"><label for="depthBearing">投げる方向</label><output id="depthBearingValue" for="depthBearing">北 0°</output></div>
+      <input id="depthBearing" class="depth-range" type="range" min="0" max="359" step="1" value="0" aria-label="キャスト方向の方位角">
+      <div class="depth-coordinates" id="depthCoordinates" aria-live="polite">開始地点を選択してください</div>
+      <label class="depth-field-label" for="depthDemoProfile">描画サンプル</label>
+      <select id="depthDemoProfile" class="depth-select"><option value="shallow">遠浅サンプル</option><option value="steep">急深サンプル</option><option value="flat">平坦サンプル</option><option value="undulating">起伏サンプル</option></select>
+      <div id="depthDrawing" class="depth-drawing" aria-live="polite"></div>
+      <p id="depthDrawStatus" class="depth-draw-status">デモ地形を表示中。実際の地点の水深を表しません。</p>
+    </section>
   </main>
   <nav class="bottom-nav"><button class="active"><span>⌖</span>釣り天気</button><button id="mapNav"><span>▧</span>マップ</button><button id="helpButton"><span>ⓘ</span>使い方</button></nav>
   <dialog id="spotDialog"><form method="dialog" class="dialog-card"><div class="dialog-grab"></div><div class="section-kicker">NEW FISHING SPOT</div><h2>釣り場を保存</h2><p id="spotCoordinates" class="muted"></p><label for="spotName">釣り場の名前</label><input id="spotName" maxlength="32" placeholder="例：いつもの堤防" required><div class="dialog-actions"><button class="secondary-button" value="cancel">キャンセル</button><button id="confirmSave" class="primary-button" value="default">保存する</button></div></form></dialog>
@@ -33,5 +48,5 @@
   <dialog id="hourDialog"><form method="dialog" class="dialog-card"><div class="dialog-grab"></div><div class="section-kicker">HOURLY FORECAST</div><h2 id="hourDialogTitle">時間別予報</h2><p id="hourDialogBody"></p><button class="primary-button full-button" value="close">閉じる</button></form></dialog>
   <dialog id="roomDialog"><form id="roomForm" class="dialog-card"><div class="dialog-grab"></div><div class="section-kicker">JOIN SHARED MAP</div><h2>共有リンクから参加</h2><p>この起動環境では共有ルームを特定できません。Safariで開いた共有リンクを貼り付けてください。新しいルームは作成せず、既存のポイントを読み込みます。</p><label for="roomLinkInput">共有リンクまたはルームID</label><input id="roomLinkInput" type="text" autocomplete="url" autocapitalize="off" spellcheck="false" placeholder="https://…/#room=…" required><p id="roomError" class="room-error" aria-live="polite"></p><div class="dialog-actions"><button id="roomLaterButton" class="secondary-button" type="button">あとで</button><button class="primary-button" type="submit">参加して読み込む</button></div></form></dialog>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabase-config.js"></script><script src="verdict.js"></script><script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabase-config.js"></script><script src="verdict.js"></script><script src="depth.js"></script><script src="app.js"></script>
 </body></html>

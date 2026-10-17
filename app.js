@@ -13,6 +13,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let map, userMarker, accuracyCircle, markers = [], spots = [], currentPosition = null, pendingCoords = null, client = null, channel = null, roomId = null, refreshTimer, syncTimer;
 let selectedTideSpotId = '', tideYearCache = new Map(), tideRenderToken = 0;
+let depthMapPicking = false, depthStart = null, depthStartSpotId = '', depthBearing = 0, depthCastLine = null, depthStartMarker = null, depthEndMarker = null;
 
 const TIDE_STATION = { name:'宮津', code:'T2', lat:35 + 32 / 60, lon:135 + 12 / 60 };
 
@@ -133,8 +134,56 @@ function initMap() {
   map = L.map('map', { zoomControl:false, scrollWheelZoom:false }).setView(DEFAULT_CENTER, 10);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'&copy; OpenStreetMap' }).addTo(map);
   L.control.zoom({ position:'topright' }).addTo(map);
-  map.on('click', (event) => { pendingCoords = [event.latlng.lat, event.latlng.lng]; openSpotDialog(pendingCoords); });
+  map.on('click', (event) => {
+    if (depthMapPicking) { setDepthOrigin(event.latlng.lat, event.latlng.lng, '', '地図で選択した地点'); $('depthPickButton').classList.remove('active'); $('depthPickButton').textContent='地図で開始地点を選ぶ'; depthMapPicking=false; map.getContainer().classList.remove('depth-pick-cursor'); return; }
+    pendingCoords = [event.latlng.lat, event.latlng.lng]; openSpotDialog(pendingCoords);
+  });
   renderSpots(); setTimeout(() => map.invalidateSize(), 250);
+}
+
+function destinationPoint(lat, lon, bearingDeg, distanceM=100) {
+  const radius=6371008.8, bearing=bearingDeg*Math.PI/180, angular=distanceM/radius, phi1=lat*Math.PI/180, lambda1=lon*Math.PI/180;
+  const phi2=Math.asin(Math.sin(phi1)*Math.cos(angular)+Math.cos(phi1)*Math.sin(angular)*Math.cos(bearing));
+  const lambda2=lambda1+Math.atan2(Math.sin(bearing)*Math.sin(angular)*Math.cos(phi1),Math.cos(angular)-Math.sin(phi1)*Math.sin(phi2));
+  return [phi2*180/Math.PI,((lambda2*180/Math.PI+540)%360)-180];
+}
+function setDepthOrigin(lat, lon, spotId='', label='地図で選択した地点') {
+  depthStart={lat:Number(lat),lon:Number(lon),label}; depthStartSpotId=spotId?String(spotId):'';
+  const select=$('depthSpotSelect'); if(select) select.value=depthStartSpotId;
+  updateDepthCast();
+}
+function updateDepthCast() {
+  if(!$('depthBearingValue')) return;
+  depthBearing=Number($('depthBearing').value)||0;
+  $('depthBearingValue').textContent=`${compass(depthBearing)} ${depthBearing}°`;
+  if(!depthStart) {
+    $('depthCoordinates').textContent='開始地点を選択してください';
+    [depthCastLine,depthStartMarker,depthEndMarker].forEach(layer=>{if(layer&&map?.hasLayer(layer))map.removeLayer(layer);});
+    depthCastLine=depthStartMarker=depthEndMarker=null; return;
+  }
+  const end=destinationPoint(depthStart.lat,depthStart.lon,depthBearing);
+  $('depthCoordinates').textContent=`開始 ${depthStart.lat.toFixed(5)}, ${depthStart.lon.toFixed(5)} → 100m先 ${end[0].toFixed(5)}, ${end[1].toFixed(5)} · ${compass(depthBearing)} ${depthBearing}°`;
+  const points=[[depthStart.lat,depthStart.lon],end];
+  if(depthCastLine) depthCastLine.setLatLngs(points); else depthCastLine=L.polyline(points,{className:'depth-cast-line',color:'#d8fdff',weight:4,dashArray:'8 6'}).addTo(map);
+  if(depthStartMarker) depthStartMarker.setLatLng(points[0]); else depthStartMarker=L.circleMarker(points[0],{className:'depth-cast-start',radius:7,fillOpacity:1,weight:2}).addTo(map).bindTooltip('CAST LINE 始点');
+  if(depthEndMarker) depthEndMarker.setLatLng(end); else depthEndMarker=L.circleMarker(end,{className:'depth-cast-handle',radius:6,fillOpacity:1,weight:2}).addTo(map).bindTooltip('100m先');
+}
+function refreshDepthSpotOptions() {
+  const select=$('depthSpotSelect'); if(!select)return;
+  select.innerHTML='<option value="">登録済みポイントから選択</option>';
+  spots.forEach(spot=>{const option=document.createElement('option');option.value=String(spot.id);option.textContent=spot.name;select.appendChild(option);});
+  if(depthStartSpotId && !spots.some(spot=>String(spot.id)===depthStartSpotId)){depthStart=null;depthStartSpotId='';}
+  if(depthStartSpotId) select.value=depthStartSpotId;
+  if(!depthStart && spots.length) setDepthOrigin(spots[0].lat,spots[0].lon,spots[0].id,spots[0].name);
+}
+function initializeDepthUI() {
+  $('depthDemoProfile').addEventListener('change',()=>HINATA_DEPTH.render($('depthDrawing'),HINATA_DEPTH.sampleProfile($('depthDemoProfile').value)));
+  $('depthBearing').addEventListener('input',updateDepthCast);
+  $('depthSpotSelect').addEventListener('change',()=>{const spot=spots.find(item=>String(item.id)===$('depthSpotSelect').value);if(spot){setDepthOrigin(spot.lat,spot.lon,spot.id,spot.name);map.setView([spot.lat,spot.lon],13);}});
+  $('depthPickButton').addEventListener('click',()=>{depthMapPicking=!depthMapPicking;$('depthPickButton').classList.toggle('active',depthMapPicking);$('depthPickButton').textContent=depthMapPicking?'地図をタップして地点を指定':'地図で開始地点を選ぶ';map.getContainer().classList.toggle('depth-pick-cursor',depthMapPicking);if(depthMapPicking)document.querySelector('.map-section').scrollIntoView({behavior:'smooth'});});
+  $('depthUseLocationButton').addEventListener('click',()=>{if(currentPosition)setDepthOrigin(currentPosition.lat,currentPosition.lon,'','現在地');else showInfo('現在地がありません','先に「現在地」を取得してください。');});
+  HINATA_DEPTH.render($('depthDrawing'),HINATA_DEPTH.sampleProfile('shallow'));
+  refreshDepthSpotOptions();
 }
 
 function validRoomId(value){return typeof value==='string'&&/^[a-f0-9]{24,64}$/i.test(value);}
@@ -245,7 +294,7 @@ function renderSpots() {
   if(!map) return; markers.forEach(m=>map.removeLayer(m)); markers=[]; const list=$('spotList'); list.innerHTML='';
   if(!spots.length) list.innerHTML='<div class="empty-state">地図の「ココを保存」から、仲間と共有する釣り場を追加できます。</div>';
   spots.forEach(spot=>{const marker=L.marker([spot.lat,spot.lon]).addTo(map).bindPopup(`<strong>${esc(spot.name)}</strong><br><button data-delete="${esc(spot.id)}">この釣り場を削除</button>`);markers.push(marker);marker.on('popupopen',()=>{const b=document.querySelector(`[data-delete="${CSS.escape(spot.id)}"]`);b?.addEventListener('click',()=>removeSpot(spot.id));});const card=document.createElement('button');card.className='spot-card';card.type='button';card.innerHTML=`<span class="spot-pin">⌖</span><span class="spot-info"><strong>${esc(spot.name)}</strong><small>${Number(spot.lat).toFixed(3)}, ${Number(spot.lon).toFixed(3)} · ${esc(spot.createdLabel||'登録済み')}</small></span><span class="spot-weather">›<small>天気を見る</small></span>`;card.addEventListener('click',()=>{map.setView([spot.lat,spot.lon],13);$('locationTitle').textContent=spot.name;loadWeather(spot.lat,spot.lon);selectedTideSpotId=String(spot.id);$('tideSpotSelect').value=selectedTideSpotId;renderTide(spot);document.querySelector('.hero').scrollIntoView({behavior:'smooth'});});list.appendChild(card);});
-  updateTideSpotOptions();
+  updateTideSpotOptions(); refreshDepthSpotOptions();
 }
 function persistLocal(){localStorage.setItem(STORAGE_KEY,JSON.stringify(spots));}
 async function saveSpot(name,coords){const spot={id:crypto.randomUUID(),name:name.trim(),lat:coords[0],lon:coords[1],createdLabel:'登録 '+new Date().toLocaleDateString('ja-JP')};if(client&&roomId){const {error}=await client.rpc('add_spot',{p_room_id:roomId,p_name:spot.name,p_lat:spot.lat,p_lon:spot.lon});if(error){showInfo('共有保存に失敗しました','SupabaseのProject URL・anon key・SQL設定を確認してください。ポイントは保存されませんでした。');return;}await loadSharedSpots();}else{spots.unshift(spot);persistLocal();}renderSpots();}
@@ -294,5 +343,5 @@ async function copyShareLink(){if(!roomId){$('roomError').textContent='共有ル
 function showInfo(title,body){$('infoTitle').textContent=title;$('infoBody').textContent=body;$('infoDialog').showModal();}
 function bindUI(){ $('saveSpotButton').addEventListener('click',()=>{if(!roomId){$('roomDialog').showModal();return;}if(currentPosition)openSpotDialog([currentPosition.lat,currentPosition.lon]);else if(pendingCoords)openSpotDialog(pendingCoords);else showInfo('地点を選択','まず現在地を取得するか、地図をタップしてください。');}); $('confirmSave').addEventListener('click',async(e)=>{e.preventDefault();const name=$('spotName').value.trim();if(!name)return;await saveSpot(name,pendingCoords);$('spotDialog').close();}); $('locateButton').addEventListener('click',locate); $('shareButton').addEventListener('click',copyShareLink); $('copyLinkButton').addEventListener('click',copyShareLink); $('tideSpotSelect').addEventListener('change',()=>{selectedTideSpotId=$('tideSpotSelect').value;renderTide(spots.find(spot=>String(spot.id)===selectedTideSpotId));}); $('roomForm').addEventListener('submit',async(e)=>{e.preventDefault();const id=roomIdFromInput($('roomLinkInput').value);if(!id){$('roomError').textContent='有効な共有リンクまたはルームIDを確認してください。';return;}$('roomError').textContent='';$('roomDialog').close();await activateRoom(id);}); $('roomLaterButton').addEventListener('click',()=>$('roomDialog').close()); $('mapNav').addEventListener('click',()=>$('map').scrollIntoView({behavior:'smooth'})); $('helpButton').addEventListener('click',()=>showInfo('使い方','「ココを保存」で現在地を登録できます。地図をタップするとその地点を登録できます。共有リンクを知っている人は、同じ釣り場マップを開いてポイントを追加・削除できます。共有リンクは二人の間だけで扱ってください。天気・海況データはOpen-Meteoを使用します。潮汐は気象庁の宮津推算値を、登録済みポイントから選んで表示します。')); }
 
-async function start(){initMap();bindUI();await setupSharing();locate();navigator.serviceWorker?.register('./sw.js').catch(()=>{});refreshTimer=setInterval(()=>{const p=currentPosition;if(p)loadWeather(p.lat,p.lon);},30*60*1000);}
+async function start(){initMap();bindUI();await setupSharing();initializeDepthUI();locate();navigator.serviceWorker?.register('./sw.js').catch(()=>{});refreshTimer=setInterval(()=>{const p=currentPosition;if(p)loadWeather(p.lat,p.lon);},30*60*1000);}
 document.addEventListener('DOMContentLoaded',start);
