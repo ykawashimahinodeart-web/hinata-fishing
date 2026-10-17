@@ -36,22 +36,31 @@ function locate() {
 }
 
 async function loadWeather(lat, lon) {
+  const cacheKey = `hinata-weather-v11-${lat.toFixed(3)}-${lon.toFixed(3)}`;
+  const cached = readWeatherCache(cacheKey);
+  if (cached) renderWeather(cached.weather, cached.marine, true);
+  $('forecastStatus').textContent = '最新予報を取得中…';
   try {
-    const q = new URLSearchParams({latitude:lat,longitude:lon,current:'temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m',hourly:'temperature_2m,precipitation_probability,wind_speed_10m,wind_gusts_10m',daily:'sunrise,sunset,weather_code,wind_speed_10m_max,wind_gusts_10m_max',timezone:'auto',forecast_days:2,wind_speed_unit:'ms'});
-    const mq = new URLSearchParams({latitude:lat,longitude:lon,current:'wave_height,sea_surface_temperature',hourly:'wave_height',timezone:'auto',forecast_days:2});
+    const q = new URLSearchParams({latitude:lat,longitude:lon,current:'temperature_2m,apparent_temperature,precipitation,rain,showers,snowfall,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m',hourly:'temperature_2m,precipitation_probability,precipitation,rain,showers,snowfall,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m',daily:'sunrise,sunset,weather_code,wind_speed_10m_max,wind_gusts_10m_max',timezone:'auto',forecast_days:2,wind_speed_unit:'ms',precipitation_unit:'mm'});
+    const mq = new URLSearchParams({latitude:lat,longitude:lon,current:'wave_height,wave_period,sea_surface_temperature',hourly:'wave_height,wave_period',timezone:'auto',forecast_days:2});
     const [weatherRes, marineRes] = await Promise.all([fetch(`https://api.open-meteo.com/v1/forecast?${q}`),fetch(`https://marine-api.open-meteo.com/v1/marine?${mq}`)]);
     if (!weatherRes.ok) throw new Error('weather');
     const weather = await weatherRes.json(); const marine = marineRes.ok ? await marineRes.json() : null;
-    renderWeather(weather, marine);
+    writeWeatherCache(cacheKey, weather, marine);
+    renderWeather(weather, marine, false);
   } catch (_) {
-    $('updatedAt').textContent = '気象データを取得できません'; $('verdictTitle').textContent = '天気は未取得'; $('verdictReason').textContent = '通信状況を確認して、もう一度お試しください。';
+    if (cached) { $('updatedAt').textContent = `最新予報の取得失敗 · ${new Date(cached.savedAt).toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}時点`; $('forecastStatus').textContent = '最新情報を取得できません'; }
+    else { $('updatedAt').textContent = '気象データを取得できません'; $('forecastStatus').textContent = '予報を取得できません'; $('verdictTitle').textContent = '判定できません'; $('verdictReason').textContent = '予報データがないため判定しません。通信状況を確認してください。'; $('hourlyForecast').innerHTML = '<p class="forecast-empty">予報データを取得できません。時間や条件を推測して表示していません。</p>'; }
   }
 }
+
+function readWeatherCache(key){try{const value=JSON.parse(localStorage.getItem(key)||'null');return value&&Date.now()-value.savedAt<30*60*1000?value:null;}catch{return null;}}
+function writeWeatherCache(key,weather,marine){try{localStorage.setItem(key,JSON.stringify({savedAt:Date.now(),weather,marine}));}catch{}}
 
 const compass = (deg) => ['北','北東','東','南東','南','南西','西','北西'][Math.round(deg/45)%8];
 const wxLabel = (code) => code === 0 ? '晴れ' : code <= 3 ? 'くもり' : code < 50 ? '霧' : code < 60 ? '霧雨' : code < 70 ? '雨' : code < 80 ? '雪' : code < 85 ? 'にわか雨' : '荒天';
 
-function renderWeather(w, m) {
+function renderWeather(w, m, isCached=false) {
   const c=w.current, d=w.daily, h=w.hourly, mc=m?.current; $('temperature').textContent=`${Math.round(c.temperature_2m)}°`;
   $('wind').textContent=`${compass(c.wind_direction_10m)} ${Number(c.wind_speed_10m).toFixed(1)}`;
   $('wave').textContent=mc?.wave_height != null ? `${Number(mc.wave_height).toFixed(1)}m` : '--';
@@ -63,16 +72,32 @@ function renderWeather(w, m) {
   const idx=Math.max(0,d.time.findIndex(day=>day===localNow));
   const hourIdx=h.time.findIndex(t=>new Date(`${t}:00${w.utc_offset_seconds>=0?'+':'-'}${String(Math.floor(Math.abs(w.utc_offset_seconds)/3600)).padStart(2,'0')}:${String(Math.floor((Math.abs(w.utc_offset_seconds)%3600)/60)).padStart(2,'0')}`)>=now);
   const sunrise=new Date(d.sunrise[idx]), sunset=new Date(d.sunset[idx]);
-  const gust=Math.max(Number(c.wind_gusts_10m)||0,Number(d.wind_gusts_10m_max[idx])||0), wind=Number(c.wind_speed_10m)||0, wave=mc?.wave_height != null ? Number(mc.wave_height) : null, code=Number(c.weather_code), rain=Number(c.precipitation)||0;
-  let grade='go', title='行け！', icon='🔥', reason=`${wxLabel(code)}で風は${wind.toFixed(1)}m/s。釣りやすい条件です。`;
-  if (wind>=15 || gust>=20 || (wave!==null && wave>=3) || (code>=95&&code<=99) || code===65 || code===67 || code===75 || rain>=15) { grade='stop'; title='今日はやめとけ。'; icon='🛑'; reason=wind>=15||gust>=20?`強風（最大瞬間風速 ${gust.toFixed(1)}m/s）。安全を優先してください。`:wave!==null&&wave>=3?`波高 ${wave.toFixed(1)}mの予報です。海には近づかないでください。`:'荒天の予報です。釣行は見合わせてください。'; }
-  else if (wind>=9 || (wave!==null&&wave>=1.5) || code>=80 || rain>=5) { grade='maybe'; title='微妙…'; icon='🤔'; reason=wind>=9?`風が${wind.toFixed(1)}m/s。風裏を選び、無理のない範囲で。`:wave!==null&&wave>=1.5?`波高 ${wave.toFixed(1)}m。足場と波の状況をよく確認してください。`:'雨や天候の変化に注意が必要です。'; }
-  else if (wind>=5 || (wave!==null&&wave>=0.8) || code>=51 || rain>0) { grade='ok'; title='悪くない！'; icon='👍'; reason=wind>=5?`風は${wind.toFixed(1)}m/s。場所を選べば楽しめそう。`:wave!==null&&wave>=0.8?`波高 ${wave.toFixed(1)}m。足場に気をつけて。`:'天候の変化に気をつけて楽しめそう。'; }
-  if(wave===null && grade==='go'){ title='悪くない！'; grade='ok'; reason='陸上の天気は穏やか。海況データがなく、現地の波を確認してください。'; }
-  $('verdictCard').className=`verdict-card verdict-${grade}`; $('verdictIcon').textContent=icon; $('verdictTitle').textContent=title; $('verdictReason').textContent=reason;
-  let best=''; if(hourIdx>=0 && h.time[hourIdx]) { const scores=[]; for(let i=hourIdx;i<Math.min(hourIdx+18,h.time.length);i++){ const dt=new Date(`${h.time[i]}:00${w.utc_offset_seconds>=0?'+':'-'}${String(Math.floor(Math.abs(w.utc_offset_seconds)/3600)).padStart(2,'0')}:${String(Math.floor((Math.abs(w.utc_offset_seconds)%3600)/60)).padStart(2,'0')}`); const nearSunrise=Math.abs(dt-sunrise)/3600000<1.5, nearSunset=Math.abs(dt-sunset)/3600000<1.5; if(nearSunrise||nearSunset) scores.push({i,score:(h.precipitation_probability[i]||0)+(h.wind_speed_10m[i]||0)*4+(h.wind_gusts_10m[i]||0)*2}); } if(scores.length){scores.sort((a,b)=>a.score-b.score);const time=h.time[scores[0].i].slice(11,16);best=`${time}ごろ（マズメ）`;} }
-  $('recommendTime').textContent=grade==='stop'?'安全のため釣行を見合わせてください':best||'日の出・日の入り前後がおすすめ'; $('updatedAt').textContent=`${wxLabel(code)} · ${new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}更新`;
+  const tomorrowDate=new Date(sunrise);tomorrowDate.setDate(tomorrowDate.getDate()+1);const tomorrowSunrise=d.sunrise[idx+1]?new Date(d.sunrise[idx+1]):tomorrowDate;
+  const nowMs=Date.now(), offset=w.utc_offset_seconds||0;
+  const hours=[];
+  for(let i=0;i<h.time.length;i++){
+    const ts=localForecastDate(h.time[i],offset);
+    if(ts.getTime()<nowMs-3600000||ts.getTime()>nowMs+24*3600000)continue;
+    const mi=m?.hourly?.time?.indexOf(h.time[i]) ?? -1;
+    const point={time:h.time[i],temp:h.temperature_2m?.[i],wind:h.wind_speed_10m?.[i],direction:h.wind_direction_10m?.[i],gust:h.wind_gusts_10m?.[i],rain:h.precipitation?.[i] ?? h.rain?.[i] ?? h.showers?.[i],precipProbability:h.precipitation_probability?.[i],code:h.weather_code?.[i],wave:mi>=0?m.hourly.wave_height?.[mi]:null,wavePeriod:mi>=0?m.hourly.wave_period?.[mi]:null};
+    point.verdict=window.HinataVerdict.evaluate(point);hours.push(point);
+  }
+  const code=Number.isFinite(c.weather_code)?Number(c.weather_code):null;
+  const current=hours[0]||window.HinataVerdict.evaluate({wind:c.wind_speed_10m,gust:c.wind_gusts_10m,wave:mc?.wave_height,rain:c.precipitation,code});
+  $('verdictCard').className=`verdict-card verdict-${current.cls||'loading'}`;$('verdictIcon').textContent=current.icon;$('verdictTitle').textContent=current.title;$('verdictReason').textContent=current.reason;
+  renderHourly(hours);
+  const candidates=[];
+  for(const point of hours){const ts=localForecastDate(point.time,offset);const near=Math.min(Math.abs(ts-sunrise),Math.abs(ts-sunset),Math.abs(ts-tomorrowSunrise));if(near<=2*3600000&&point.verdict.grade&&point.verdict.grade!=='D'){const v=point.verdict;const score=(v.grade==='A'?0:v.grade==='B'?2:5)+(point.wind??0)*.5+(point.precipProbability??0)/25+(point.gust??0)*.2+(point.wave??0)*2;candidates.push({point,score});}}
+  candidates.sort((a,b)=>a.score-b.score);const picks=[];for(const x of candidates){const minute=Number(x.point.time.slice(11,13))*60+Number(x.point.time.slice(14,16));if(!picks.some(p=>Math.abs(p.minute-minute)<90))picks.push({minute,time:x.point.time.slice(11,16),grade:x.point.verdict.grade});if(picks.length===3)break;}
+  $('recommendTime').textContent=current.grade==='D'?'安全のため釣行を見合わせてください':picks.length?picks.map(p=>`${p.time} (${p.grade})`).join(' · '):'安全条件を満たす時間帯を見つけられません';
+  $('updatedAt').textContent=`${code==null?'天気コード未取得':wxLabel(code)} · ${isCached?'保存済み予報':'更新 '+new Date().toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'})}`;
 }
+
+function localForecastDate(value,offset){return new Date(`${value}:00${offset>=0?'+':'-'}${String(Math.floor(Math.abs(offset)/3600)).padStart(2,'0')}:${String(Math.floor((Math.abs(offset)%3600)/60)).padStart(2,'0')}`);}
+const gradeIcon={A:'🔥',B:'👍',C:'🤔',D:'🛑'};
+function renderHourly(hours){const box=$('hourlyForecast');if(!hours.length){$('forecastStatus').textContent='時間別データなし';box.innerHTML='<p class="forecast-empty">この時間の予報データはありません。</p>';return;}$('forecastStatus').textContent=`${hours.length}時間分 · Open-Meteo`;
+ box.innerHTML=hours.map((p,i)=>`<button class="hour-card" type="button" data-hour="${i}" aria-label="${p.time.slice(11,16)} ${p.verdict.title}"><strong>${p.time.slice(11,16)}</strong><span class="hour-weather">${p.code==null?'--':wxLabel(p.code)}</span><span>${p.temp==null?'--':`${Math.round(p.temp)}°`}</span><small>風 ${p.wind==null?'--':`${Number(p.wind).toFixed(1)}m/s`}</small><small>瞬間 ${p.gust==null?'--':`${Number(p.gust).toFixed(1)}m/s`}</small><small>波 ${p.wave==null?'--':`${Number(p.wave).toFixed(1)}m`}</small><small>雨 ${p.precipProbability==null?'--':`${Math.round(p.precipProbability)}%`}</small><b class="hour-grade">${gradeIcon[p.verdict.grade]||'ℹ️'} ${p.verdict.grade||'--'}</b></button>`).join('');
+ box.querySelectorAll('[data-hour]').forEach(button=>button.addEventListener('click',()=>{const p=hours[Number(button.dataset.hour)];$('hourDialogTitle').textContent=`${p.time.replace('T',' ')} · ${p.verdict.title}`;$('hourDialogBody').textContent=`天気 ${p.code==null?'未取得':wxLabel(p.code)} / 気温 ${p.temp==null?'--':`${Math.round(p.temp)}°C`} / 風 ${p.wind==null?'--':`${Number(p.wind).toFixed(1)}m/s`} ${p.direction==null?'':compass(p.direction)} / 最大瞬間風速 ${p.gust==null?'--':`${Number(p.gust).toFixed(1)}m/s`} / 波高 ${p.wave==null?'未取得':`${Number(p.wave).toFixed(1)}m`} / 波周期 ${p.wavePeriod==null?'未取得':`${Number(p.wavePeriod).toFixed(0)}秒`} / 降水確率 ${p.precipProbability==null?'未取得':`${Math.round(p.precipProbability)}%`} / 降水量 ${p.rain==null?'未取得':`${Number(p.rain).toFixed(1)}mm/h`}。 ${p.verdict.reason}`;$('hourDialog').showModal();}));}
 
 function openSpotDialog(coords) { $('spotCoordinates').textContent=`${coords[0].toFixed(5)}, ${coords[1].toFixed(5)}`; $('spotName').value=''; $('spotDialog').showModal(); setTimeout(()=>$('spotName').focus(),100); }
 function renderSpots() {

@@ -15,6 +15,9 @@
       <div class="verdict-card verdict-loading" id="verdictCard"><div class="verdict-icon" id="verdictIcon">🎣</div><div class="verdict-copy"><div class="verdict-label">ひなた判定</div><div class="verdict-title" id="verdictTitle">天気を確認中…</div><p id="verdictReason">位置情報と気象データを取得しています。</p></div></div>
       <div class="metrics"><div class="metric"><span>気温</span><strong id="temperature">--°</strong></div><div class="metric"><span>風</span><strong id="wind">--</strong></div><div class="metric"><span>波</span><strong id="wave">--</strong></div><div class="metric"><span>海水温</span><strong id="seaTemp">--</strong></div></div>
       <div class="recommend"><span>⌁</span><div><b id="recommendTitle">おすすめ時間</b><small id="recommendTime">データを読み込み中</small></div></div>
+      <p class="forecast-disclaimer">気象条件に基づく目安です。釣果や現地の安全を保証するものではありません。</p>
+      <section class="forecast-section" aria-labelledby="forecastHeading"><div class="forecast-heading"><h2 id="forecastHeading">これから24時間</h2><span id="forecastStatus" class="muted">予報を読み込み中</span></div><div id="hourlyForecast" class="hourly-forecast" aria-label="24時間の時間別予報"></div></section>
+      <section class="tide-section" aria-labelledby="tideHeading"><div class="forecast-heading"><h2 id="tideHeading">潮汐</h2><span class="muted">潮位表データ未接続</span></div><p>この釣り場に対応する潮汐予測は現在表示できません。満潮・干潮時刻は推測で表示しません。</p></section>
       <p class="safety-note">海況予報は目安です。現地の状況と気象警報を確認し、安全を最優先してください。</p>
     </section>
     <section class="map-section"><div class="section-heading"><div><div class="section-kicker">YOUR FISHING SPOTS</div><h2>釣り場マップ</h2></div><button id="locateButton" class="text-button">◎ 現在地</button></div>
@@ -27,6 +30,7 @@
   <nav class="bottom-nav"><button class="active"><span>⌖</span>釣り天気</button><button id="mapNav"><span>▧</span>マップ</button><button id="helpButton"><span>ⓘ</span>使い方</button></nav>
   <dialog id="spotDialog"><form method="dialog" class="dialog-card"><div class="dialog-grab"></div><div class="section-kicker">NEW FISHING SPOT</div><h2>釣り場を保存</h2><p id="spotCoordinates" class="muted"></p><label for="spotName">釣り場の名前</label><input id="spotName" maxlength="32" placeholder="例：いつもの堤防" required><div class="dialog-actions"><button class="secondary-button" value="cancel">キャンセル</button><button id="confirmSave" class="primary-button" value="default">保存する</button></div></form></dialog>
   <dialog id="infoDialog"><form method="dialog" class="dialog-card"><div class="dialog-grab"></div><div class="section-kicker">HINATA FISHING</div><h2 id="infoTitle">使い方</h2><p id="infoBody"></p><button class="primary-button full-button" value="close">閉じる</button></form></dialog>
+  <dialog id="hourDialog"><form method="dialog" class="dialog-card"><div class="dialog-grab"></div><div class="section-kicker">HOURLY FORECAST</div><h2 id="hourDialogTitle">時間別予報</h2><p id="hourDialogBody"></p><button class="primary-button full-button" value="close">閉じる</button></form></dialog>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabase-config.js"></script><script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabase-config.js"></script><script src="verdict.js"></script><script src="app.js"></script>
 </body></html>
