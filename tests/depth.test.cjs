@@ -61,3 +61,19 @@ test('precision and local CSV statuses distinguish measured points, qualified se
   assert.match(status.csvStatus({datasetCount:1,match:{points:[{}],segments:[]}}).label,/対象地点付近/);
   assert.match(status.csvStatus({datasetCount:1,error:true}).label,/読み込みエラー/);
 });
+
+test('Ver 1.5 Phase 1 hides bathymetry UI while retaining CAST LINE and data modules', () => {
+  const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+  assert.match(html,/<div class="bathymetry-control" hidden/);
+  assert.match(html,/<section class="depth-status-panel"[^>]*hidden/);
+  assert.match(html,/<section class="depth-section"[^>]*hidden/);
+  assert.match(html,/<section class="cast-tool" aria-labelledby="castToolHeading">/);
+  assert.match(html,/id="castBearing"/);
+  assert.match(html,/id="castCoordinates"/);
+  assert.match(html,/depth-store\.js/);
+  assert.match(html,/depth-data\.js/);
+  assert.match(html,/depth-status\.js/);
+  const worker=fs.readFileSync(path.join(root,'sw.js'),'utf8');
+  assert.match(worker,/hinata-fishing-v11/);
+  assert.doesNotMatch(worker,/hinata-fishing-v12/);
+});

@@ -1,3 +1,4 @@
+// Ver.1.5 Phase 1 updates the shell in the existing cache to preserve offline user data.
 const CACHE='hinata-fishing-v11';const CORE=['./','./index.html','./styles.css','./depth.css','./app.js','./depth.js','./depth-data.js','./depth-store.js','./depth-analysis.js','./depth-status.js','./verdict.js','./supabase-config.js','./manifest.webmanifest','./icon.svg','./data/tides/miyazu-2026.json','./data/tides/miyazu-2027.json'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(CORE)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
