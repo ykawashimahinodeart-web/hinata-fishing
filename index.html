@@ -17,14 +17,14 @@
       <div class="recommend"><span>⌁</span><div><b id="recommendTitle">おすすめ時間</b><small id="recommendTime">データを読み込み中</small></div></div>
       <p class="forecast-disclaimer">気象条件に基づく目安です。釣果や現地の安全を保証するものではありません。</p>
       <section class="forecast-section" aria-labelledby="forecastHeading"><div class="forecast-heading"><h2 id="forecastHeading">これから24時間</h2><span id="forecastStatus" class="muted">予報を読み込み中</span></div><div id="hourlyForecast" class="hourly-forecast" aria-label="24時間の時間別予報"></div></section>
-      <section class="tide-section" aria-labelledby="tideHeading"><div class="forecast-heading"><h2 id="tideHeading">潮汐</h2><span class="muted">潮位表データ未接続</span></div><p>この釣り場に対応する潮汐予測は現在表示できません。満潮・干潮時刻は推測で表示しません。</p></section>
+      <section class="tide-section" aria-labelledby="tideHeading"><div class="forecast-heading"><h2 id="tideHeading">HINATA TIDE</h2><span id="tideStatus" class="muted">釣り場を選択してください</span></div><label class="tide-select-label" for="tideSpotSelect">対象の釣り場</label><select id="tideSpotSelect" class="tide-select"><option value="">登録済みポイントから選択</option></select><div id="tideStation" class="tide-station">選択した釣り場に対応する潮位情報を表示します。</div><div id="tideEvents" class="tide-events"></div><div id="tideChart" class="tide-chart" aria-live="polite"><p class="forecast-empty">釣り場を選択すると、今日から24時間の潮位を表示します。</p></div><p id="tideNote" class="tide-note">潮位は気象庁の推算値です。潮位表基準面からの高さ（cm）で、平均海面からの標高ではありません。</p><p class="tide-source">出典：<a href="https://www.data.jma.go.jp/kaiyou/db/tide/suisan/suisan.php?stn=T2" target="_blank" rel="noreferrer">気象庁 潮位表・宮津</a></p></section>
       <p class="safety-note">海況予報は目安です。現地の状況と気象警報を確認し、安全を最優先してください。</p>
     </section>
     <section class="map-section"><div class="section-heading"><div><div class="section-kicker">YOUR FISHING SPOTS</div><h2>釣り場マップ</h2></div><button id="locateButton" class="text-button">◎ 現在地</button></div>
       <div class="map-wrap"><div id="map" aria-label="釣り場の地図"></div><button id="saveSpotButton" class="save-button"><span>＋</span> ココを保存</button></div>
       <div class="share-status" id="shareStatus"><span class="status-dot"></span><span id="shareStatusText">この端末に保存中</span><button id="copyLinkButton">共有リンク</button></div>
       <div class="spot-list" id="spotList"></div>
-      <p class="attribution">地図 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors · 天気・海況 <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a></p>
+      <p class="attribution">地図 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors · 天気・海況 <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a> · 潮汐 <a href="https://www.jma.go.jp/jma/kishou/info/coment.html" target="_blank" rel="noreferrer">気象庁データを加工して作成</a></p>
     </section>
   </main>
   <nav class="bottom-nav"><button class="active"><span>⌖</span>釣り天気</button><button id="mapNav"><span>▧</span>マップ</button><button id="helpButton"><span>ⓘ</span>使い方</button></nav>

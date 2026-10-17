@@ -9,6 +9,119 @@ const DEFAULT_CENTER = [35.535, 135.196]; // Miyazu, Kyoto
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let map, userMarker, accuracyCircle, markers = [], spots = [], currentPosition = null, pendingCoords = null, client = null, channel = null, roomId = null, refreshTimer, syncTimer;
+let selectedTideSpotId = '', tideYearCache = new Map(), tideRenderToken = 0;
+
+const TIDE_STATION = { name:'宮津', code:'T2', lat:35 + 32 / 60, lon:135 + 12 / 60 };
+
+function tideDistanceKm(lat, lon) {
+  const rad = value => value * Math.PI / 180;
+  const dLat = rad(TIDE_STATION.lat - Number(lat)), dLon = rad(TIDE_STATION.lon - Number(lon));
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(rad(Number(lat))) * Math.cos(rad(TIDE_STATION.lat)) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function setTideStatus(message) { $('tideStatus').textContent = message; }
+
+async function getTideYear(year) {
+  if (!tideYearCache.has(year)) {
+    const request = fetch(`./data/tides/miyazu-${year}.json`, { cache:'no-cache' }).then(response => {
+      if (!response.ok) throw new Error('tide data unavailable');
+      return response.json();
+    }).then(data => {
+      if (data.stationCode !== TIDE_STATION.code || data.year !== year || !Array.isArray(data.days)) throw new Error('invalid tide data');
+      return data;
+    }).catch(error => { tideYearCache.delete(year); throw error; });
+    tideYearCache.set(year, request);
+  }
+  return tideYearCache.get(year);
+}
+
+function formatTideEvents(day) {
+  if (!day) return '<div class="tide-event-day"><strong>潮汐データ未取得</strong></div>';
+  const items = [
+    ...day.highs.map(event => ({ ...event, type:'満潮' })),
+    ...day.lows.map(event => ({ ...event, type:'干潮' }))
+  ].sort((a, b) => a.time.localeCompare(b.time));
+  const date = new Date(`${day.date}T00:00:00`);
+  const label = date.toLocaleDateString('ja-JP', { month:'numeric', day:'numeric', weekday:'short' });
+  return `<div class="tide-event-day"><strong>${label}</strong>${items.length ? items.map(event => `<span><b>${event.type}</b> ${event.time.trim()} · ${event.cm}cm</span>`).join('') : '<span>満干潮の予測なし</span>'}</div>`;
+}
+
+function buildTideChart(samples, markerOffset) {
+  const valid = samples.filter(sample => Number.isFinite(sample.cm));
+  if (valid.length < 2) return '<p class="forecast-empty">この期間の潮位データ未取得</p>';
+  const width = 720, height = 205, left = 38, right = 12, top = 22, bottom = 28;
+  const values = valid.map(sample => sample.cm), min = Math.min(...values), max = Math.max(...values);
+  const pad = Math.max(3, (max - min) * 0.12), low = min - pad, high = max + pad;
+  const x = index => left + (width - left - right) * index / 24;
+  const y = value => top + (height - top - bottom) * (high - value) / (high - low || 1);
+  let hasPrevious = false;
+  const path = samples.map(sample => {
+    if (!Number.isFinite(sample.cm)) { hasPrevious = false; return ''; }
+    const command = hasPrevious ? 'L' : 'M'; hasPrevious = true;
+    return `${command}${x(sample.index).toFixed(1)},${y(sample.cm).toFixed(1)}`;
+  }).filter(Boolean).join(' ');
+  const ticks = [0,6,12,18,24].map(index => `<text x="${x(index)}" y="${height - 6}" text-anchor="middle">${samples[index]?.time || ''}</text>`).join('');
+  const markerX = x(Math.max(0, Math.min(24, markerOffset)));
+  const yTicks = [0,0.5,1].map(fraction => { const value = high - (high-low)*fraction; const yy = top + (height-top-bottom)*fraction; return `<line class="tide-grid" x1="${left}" y1="${yy}" x2="${width-right}" y2="${yy}"/><text x="${left-6}" y="${yy+3}" text-anchor="end">${Math.round(value)}</text>`; }).join('');
+  const points = valid.map(sample => `<circle cx="${x(sample.index)}" cy="${y(sample.cm)}" r="2.7"/>`).join('');
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="気象庁 宮津の毎時推算潮位、cm"><g class="tide-axis">${yTicks}${ticks}</g><path class="tide-line" d="${path}"/>${points}<line class="tide-now" x1="${markerX}" y1="${top}" x2="${markerX}" y2="${height-bottom}"/><text class="tide-now-label" x="${Math.min(width-32,Math.max(left+20,markerX))}" y="14" text-anchor="middle">現在</text></svg><div class="tide-legend"><span>潮位表基準面上 (cm)</span><span><i></i>気象庁 推算潮位</span></div>`;
+}
+
+async function renderTide(spot) {
+  const renderToken = ++tideRenderToken;
+  if (!spot) {
+    setTideStatus(spots.length ? '釣り場を選択してください' : '登録ポイントがありません');
+    $('tideStation').textContent = '登録済みポイントを選ぶと、対応する潮汐データを表示します。';
+    $('tideEvents').innerHTML = '';
+    $('tideChart').innerHTML = '<p class="forecast-empty">釣り場を選択すると、今日から24時間の潮位を表示します。</p>';
+    return;
+  }
+  const distance = tideDistanceKm(spot.lat, spot.lon);
+  $('tideStation').textContent = `${spot.name} → 潮汐予測地点：宮津（直線距離 約${distance.toFixed(1)}km）`;
+  setTideStatus('気象庁の予測値');
+  $('tideEvents').innerHTML = '<div class="tide-event-day"><span>潮汐データを読み込み中…</span></div>';
+  $('tideChart').innerHTML = '<p class="forecast-empty">潮位データを読み込み中…</p>';
+  const now = new Date();
+  const start = new Date(now); start.setMinutes(0, 0, 0);
+  const dates = Array.from({length:25}, (_, index) => new Date(start.getTime() + index * 3600000));
+  const years = [...new Set(dates.map(date => date.getFullYear()))];
+  try {
+    const datasets = await Promise.all(years.map(getTideYear));
+    if (renderToken !== tideRenderToken) return;
+    setTideStatus(`気象庁 年次予測（${years.join('・')}）`);
+    const lookup = new Map();
+    datasets.forEach(data => data.days.forEach(day => lookup.set(day.date, day)));
+    const dateKey = date => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+    const today = dateKey(now), tomorrow = dateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate()+1));
+    $('tideEvents').innerHTML = [lookup.get(today), lookup.get(tomorrow)].map(formatTideEvents).join('');
+    const samples = dates.map((date, index) => {
+      const day = lookup.get(dateKey(date));
+      return {index, time:date.toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}), cm:day?.hourly?.[date.getHours()]};
+    });
+    $('tideChart').innerHTML = buildTideChart(samples, now.getMinutes()/60);
+    if (samples.some(sample => !Number.isFinite(sample.cm))) setTideStatus('一部の時間帯は潮汐データ未取得');
+    $('tideNote').textContent = '潮位は気象庁の推算値です。毎時値のみを表示し、時刻間の値は補間していません。潮位表基準面からの高さ（cm）で、平均海面からの標高ではありません。';
+  } catch {
+    $('tideEvents').innerHTML = '<div class="tide-event-day"><strong>潮汐データ未取得</strong></div>';
+    $('tideChart').innerHTML = '<p class="forecast-empty">この年の潮汐データはアプリに収録されていません。</p>';
+    setTideStatus('潮汐データ未取得');
+  }
+}
+
+function updateTideSpotOptions() {
+  const select = $('tideSpotSelect');
+  if (!select) return;
+  const previous = selectedTideSpotId || select.value;
+  select.innerHTML = '<option value="">登録済みポイントから選択</option>';
+  spots.forEach(spot => {
+    const option = document.createElement('option'); option.value = String(spot.id); option.textContent = spot.name; select.appendChild(option);
+  });
+  if (spots.some(spot => String(spot.id) === previous)) selectedTideSpotId = previous;
+  else selectedTideSpotId = spots.length ? String(spots[0].id) : '';
+  select.value = selectedTideSpotId;
+  renderTide(spots.find(spot => String(spot.id) === selectedTideSpotId));
+}
 
 function initMap() {
   map = L.map('map', { zoomControl:false, scrollWheelZoom:false }).setView(DEFAULT_CENTER, 10);
@@ -125,7 +238,8 @@ function openSpotDialog(coords) { if(!roomId){$('roomDialog').showModal();return
 function renderSpots() {
   if(!map) return; markers.forEach(m=>map.removeLayer(m)); markers=[]; const list=$('spotList'); list.innerHTML='';
   if(!spots.length) list.innerHTML='<div class="empty-state">地図の「ココを保存」から、仲間と共有する釣り場を追加できます。</div>';
-  spots.forEach(spot=>{const marker=L.marker([spot.lat,spot.lon]).addTo(map).bindPopup(`<strong>${esc(spot.name)}</strong><br><button data-delete="${esc(spot.id)}">この釣り場を削除</button>`);markers.push(marker);marker.on('popupopen',()=>{const b=document.querySelector(`[data-delete="${CSS.escape(spot.id)}"]`);b?.addEventListener('click',()=>removeSpot(spot.id));});const card=document.createElement('button');card.className='spot-card';card.type='button';card.innerHTML=`<span class="spot-pin">⌖</span><span class="spot-info"><strong>${esc(spot.name)}</strong><small>${Number(spot.lat).toFixed(3)}, ${Number(spot.lon).toFixed(3)} · ${esc(spot.createdLabel||'登録済み')}</small></span><span class="spot-weather">›<small>天気を見る</small></span>`;card.addEventListener('click',()=>{map.setView([spot.lat,spot.lon],13);$('locationTitle').textContent=spot.name;loadWeather(spot.lat,spot.lon);document.querySelector('.hero').scrollIntoView({behavior:'smooth'});});list.appendChild(card);});
+  spots.forEach(spot=>{const marker=L.marker([spot.lat,spot.lon]).addTo(map).bindPopup(`<strong>${esc(spot.name)}</strong><br><button data-delete="${esc(spot.id)}">この釣り場を削除</button>`);markers.push(marker);marker.on('popupopen',()=>{const b=document.querySelector(`[data-delete="${CSS.escape(spot.id)}"]`);b?.addEventListener('click',()=>removeSpot(spot.id));});const card=document.createElement('button');card.className='spot-card';card.type='button';card.innerHTML=`<span class="spot-pin">⌖</span><span class="spot-info"><strong>${esc(spot.name)}</strong><small>${Number(spot.lat).toFixed(3)}, ${Number(spot.lon).toFixed(3)} · ${esc(spot.createdLabel||'登録済み')}</small></span><span class="spot-weather">›<small>天気を見る</small></span>`;card.addEventListener('click',()=>{map.setView([spot.lat,spot.lon],13);$('locationTitle').textContent=spot.name;loadWeather(spot.lat,spot.lon);selectedTideSpotId=String(spot.id);$('tideSpotSelect').value=selectedTideSpotId;renderTide(spot);document.querySelector('.hero').scrollIntoView({behavior:'smooth'});});list.appendChild(card);});
+  updateTideSpotOptions();
 }
 function persistLocal(){localStorage.setItem(STORAGE_KEY,JSON.stringify(spots));}
 async function saveSpot(name,coords){const spot={id:crypto.randomUUID(),name:name.trim(),lat:coords[0],lon:coords[1],createdLabel:'登録 '+new Date().toLocaleDateString('ja-JP')};if(client&&roomId){const {error}=await client.rpc('add_spot',{p_room_id:roomId,p_name:spot.name,p_lat:spot.lat,p_lon:spot.lon});if(error){showInfo('共有保存に失敗しました','SupabaseのProject URL・anon key・SQL設定を確認してください。ポイントは保存されませんでした。');return;}await loadSharedSpots();}else{spots.unshift(spot);persistLocal();}renderSpots();}
@@ -172,7 +286,7 @@ async function loadSharedSpots(){if(!client||!roomId)return;const {data,error}=a
 
 async function copyShareLink(){if(!roomId){$('roomError').textContent='共有ルームが未選択です。Safariの共有リンクを貼り付けて参加してください。';if(!$('roomDialog').open)$('roomDialog').showModal();return;}try{await navigator.clipboard.writeText(location.href);$('copyLinkButton').textContent='コピーしました';setTimeout(()=>$('copyLinkButton').textContent='共有リンク',1800);}catch{showInfo('共有リンク',location.href);}}
 function showInfo(title,body){$('infoTitle').textContent=title;$('infoBody').textContent=body;$('infoDialog').showModal();}
-function bindUI(){ $('saveSpotButton').addEventListener('click',()=>{if(!roomId){$('roomDialog').showModal();return;}if(currentPosition)openSpotDialog([currentPosition.lat,currentPosition.lon]);else if(pendingCoords)openSpotDialog(pendingCoords);else showInfo('地点を選択','まず現在地を取得するか、地図をタップしてください。');}); $('confirmSave').addEventListener('click',async(e)=>{e.preventDefault();const name=$('spotName').value.trim();if(!name)return;await saveSpot(name,pendingCoords);$('spotDialog').close();}); $('locateButton').addEventListener('click',locate); $('shareButton').addEventListener('click',copyShareLink); $('copyLinkButton').addEventListener('click',copyShareLink); $('roomForm').addEventListener('submit',async(e)=>{e.preventDefault();const id=roomIdFromInput($('roomLinkInput').value);if(!id){$('roomError').textContent='有効な共有リンクまたはルームIDを確認してください。';return;}$('roomError').textContent='';$('roomDialog').close();await activateRoom(id);}); $('roomLaterButton').addEventListener('click',()=>$('roomDialog').close()); $('mapNav').addEventListener('click',()=>$('map').scrollIntoView({behavior:'smooth'})); $('helpButton').addEventListener('click',()=>showInfo('使い方','「ココを保存」で現在地を登録できます。地図をタップするとその地点を登録できます。共有リンクを知っている人は、同じ釣り場マップを開いてポイントを追加・削除できます。共有リンクは二人の間だけで扱ってください。天気・海況データはOpen-Meteoを使用します。潮汐情報はこの版では表示しません。')); }
+function bindUI(){ $('saveSpotButton').addEventListener('click',()=>{if(!roomId){$('roomDialog').showModal();return;}if(currentPosition)openSpotDialog([currentPosition.lat,currentPosition.lon]);else if(pendingCoords)openSpotDialog(pendingCoords);else showInfo('地点を選択','まず現在地を取得するか、地図をタップしてください。');}); $('confirmSave').addEventListener('click',async(e)=>{e.preventDefault();const name=$('spotName').value.trim();if(!name)return;await saveSpot(name,pendingCoords);$('spotDialog').close();}); $('locateButton').addEventListener('click',locate); $('shareButton').addEventListener('click',copyShareLink); $('copyLinkButton').addEventListener('click',copyShareLink); $('tideSpotSelect').addEventListener('change',()=>{selectedTideSpotId=$('tideSpotSelect').value;renderTide(spots.find(spot=>String(spot.id)===selectedTideSpotId));}); $('roomForm').addEventListener('submit',async(e)=>{e.preventDefault();const id=roomIdFromInput($('roomLinkInput').value);if(!id){$('roomError').textContent='有効な共有リンクまたはルームIDを確認してください。';return;}$('roomError').textContent='';$('roomDialog').close();await activateRoom(id);}); $('roomLaterButton').addEventListener('click',()=>$('roomDialog').close()); $('mapNav').addEventListener('click',()=>$('map').scrollIntoView({behavior:'smooth'})); $('helpButton').addEventListener('click',()=>showInfo('使い方','「ココを保存」で現在地を登録できます。地図をタップするとその地点を登録できます。共有リンクを知っている人は、同じ釣り場マップを開いてポイントを追加・削除できます。共有リンクは二人の間だけで扱ってください。天気・海況データはOpen-Meteoを使用します。潮汐は気象庁の宮津推算値を、登録済みポイントから選んで表示します。')); }
 
 async function start(){initMap();bindUI();await setupSharing();locate();navigator.serviceWorker?.register('./sw.js').catch(()=>{});refreshTimer=setInterval(()=>{const p=currentPosition;if(p)loadWeather(p.lat,p.lon);},30*60*1000);}
 document.addEventListener('DOMContentLoaded',start);
