@@ -201,7 +201,7 @@ function initMap() {
   L.control.zoom({ position:'topright' }).addTo(map);
   initGebcoBathymetry();
   map.on('click', (event) => {
-    if (depthMapPicking) { setDepthOrigin(event.latlng.lat, event.latlng.lng, '', '地図で選択した地点'); $('depthPickButton').classList.remove('active'); $('depthPickButton').textContent='地図で開始地点を選ぶ'; depthMapPicking=false; map.getContainer().classList.remove('depth-pick-cursor'); return; }
+    if (depthMapPicking) { setDepthOrigin(event.latlng.lat, event.latlng.lng, '', '地図で選択した地点'); $('depthPickButton').classList.remove('active'); $('depthPickButton').textContent='地図で開始地点を選ぶ'; $('castPickButton').classList.remove('active'); $('castPickButton').textContent='地図で地点を指定'; depthMapPicking=false; map.getContainer().classList.remove('depth-pick-cursor'); return; }
     pendingCoords = [event.latlng.lat, event.latlng.lng]; openSpotDialog(pendingCoords);
   });
   renderSpots(); setTimeout(() => map.invalidateSize(), 250);
@@ -216,19 +216,25 @@ function destinationPoint(lat, lon, bearingDeg, distanceM=100) {
 function setDepthOrigin(lat, lon, spotId='', label='地図で選択した地点') {
   depthStart={lat:Number(lat),lon:Number(lon),label}; depthStartSpotId=spotId?String(spotId):'';
   const select=$('depthSpotSelect'); if(select) select.value=depthStartSpotId;
+  const castSelect=$('castSpotSelect'); if(castSelect) castSelect.value=depthStartSpotId;
   updateDepthCast();
 }
 function updateDepthCast() {
   if(!$('depthBearingValue')) return;
   depthBearing=Number($('depthBearing').value)||0;
   $('depthBearingValue').textContent=`${compass(depthBearing)} ${depthBearing}°`;
+  if($('castBearingValue')) $('castBearingValue').textContent=`${compass(depthBearing)} ${depthBearing}°`;
+  if($('castBearing')) $('castBearing').value=String(depthBearing);
   if(!depthStart) {
     $('depthCoordinates').textContent='開始地点を選択してください';
+    if($('castCoordinates')) $('castCoordinates').textContent='開始地点を選択してください';
     [depthCastLine,depthStartMarker,depthEndMarker].forEach(layer=>{if(layer&&map?.hasLayer(layer))map.removeLayer(layer);});
     depthCastLine=depthStartMarker=depthEndMarker=null; renderDepthDataset(); return;
   }
   const end=destinationPoint(depthStart.lat,depthStart.lon,depthBearing);
-  $('depthCoordinates').textContent=`開始 ${depthStart.lat.toFixed(5)}, ${depthStart.lon.toFixed(5)} → 100m先 ${end[0].toFixed(5)}, ${end[1].toFixed(5)} · ${compass(depthBearing)} ${depthBearing}°`;
+  const readout=`開始 ${depthStart.lat.toFixed(5)}, ${depthStart.lon.toFixed(5)} → 100m先 ${end[0].toFixed(5)}, ${end[1].toFixed(5)} · ${compass(depthBearing)} ${depthBearing}°`;
+  $('depthCoordinates').textContent=readout;
+  if($('castCoordinates')) $('castCoordinates').textContent=readout;
   const points=[[depthStart.lat,depthStart.lon],end];
   if(depthCastLine) depthCastLine.setLatLngs(points); else depthCastLine=L.polyline(points,{className:'depth-cast-line',color:'#d8fdff',weight:4,dashArray:'8 6'}).addTo(map);
   if(depthStartMarker) depthStartMarker.setLatLng(points[0]); else depthStartMarker=L.circleMarker(points[0],{className:'depth-cast-start',radius:7,fillOpacity:1,weight:2}).addTo(map).bindTooltip('CAST LINE 始点');
@@ -238,17 +244,23 @@ function updateDepthCast() {
 function refreshDepthSpotOptions() {
   const select=$('depthSpotSelect'); if(!select)return;
   select.innerHTML='<option value="">登録済みポイントから選択</option>';
-  spots.forEach(spot=>{const option=document.createElement('option');option.value=String(spot.id);option.textContent=spot.name;select.appendChild(option);});
+  const castSelect=$('castSpotSelect'); if(castSelect)castSelect.innerHTML='<option value="">登録済みポイントから選択</option>';
+  spots.forEach(spot=>{const option=document.createElement('option');option.value=String(spot.id);option.textContent=spot.name;select.appendChild(option);if(castSelect)castSelect.appendChild(option.cloneNode(true));});
   if(depthStartSpotId && !spots.some(spot=>String(spot.id)===depthStartSpotId)){depthStart=null;depthStartSpotId='';}
   if(depthStartSpotId) select.value=depthStartSpotId;
+  if(castSelect)castSelect.value=depthStartSpotId;
   if(!depthStart && spots.length) setDepthOrigin(spots[0].lat,spots[0].lon,spots[0].id,spots[0].name);
 }
 function initializeDepthUI() {
   $('depthDemoProfile').addEventListener('change',()=>{if(!activeDepthDataset)HINATA_DEPTH.render($('depthDrawing'),HINATA_DEPTH.sampleProfile($('depthDemoProfile').value));});
   $('depthBearing').addEventListener('input',updateDepthCast);
   $('depthSpotSelect').addEventListener('change',()=>{const spot=spots.find(item=>String(item.id)===$('depthSpotSelect').value);if(spot){setDepthOrigin(spot.lat,spot.lon,spot.id,spot.name);map.setView([spot.lat,spot.lon],13);}});
-  $('depthPickButton').addEventListener('click',()=>{depthMapPicking=!depthMapPicking;$('depthPickButton').classList.toggle('active',depthMapPicking);$('depthPickButton').textContent=depthMapPicking?'地図をタップして地点を指定':'地図で開始地点を選ぶ';map.getContainer().classList.toggle('depth-pick-cursor',depthMapPicking);if(depthMapPicking)document.querySelector('.map-section').scrollIntoView({behavior:'smooth'});});
+  $('depthPickButton').addEventListener('click',()=>{depthMapPicking=!depthMapPicking;$('depthPickButton').classList.toggle('active',depthMapPicking);$('depthPickButton').textContent=depthMapPicking?'地図をタップして地点を指定':'地図で開始地点を選ぶ';$('castPickButton').classList.toggle('active',depthMapPicking);$('castPickButton').textContent=depthMapPicking?'地図をタップして地点を指定':'地図で地点を指定';map.getContainer().classList.toggle('depth-pick-cursor',depthMapPicking);if(depthMapPicking)document.querySelector('.map-section').scrollIntoView({behavior:'smooth'});});
   $('depthUseLocationButton').addEventListener('click',()=>{if(currentPosition)setDepthOrigin(currentPosition.lat,currentPosition.lon,'','現在地');else showInfo('現在地がありません','先に「現在地」を取得してください。');});
+  $('castSpotSelect').addEventListener('change',()=>{$('depthSpotSelect').value=$('castSpotSelect').value;$('depthSpotSelect').dispatchEvent(new Event('change'));});
+  $('castBearing').addEventListener('input',()=>{$('depthBearing').value=$('castBearing').value;$('depthBearing').dispatchEvent(new Event('input'));});
+  $('castPickButton').addEventListener('click',()=>$('depthPickButton').click());
+  $('castUseLocationButton').addEventListener('click',()=>$('depthUseLocationButton').click());
   $('depthImportButton').addEventListener('click',importDepthCsv);
   $('depthDatasetSelect').addEventListener('change',()=>selectDepthDataset($('depthDatasetSelect').value));
   $('depthExportButton').addEventListener('click',exportDepthCsv);
