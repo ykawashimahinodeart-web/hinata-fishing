@@ -14,6 +14,7 @@ const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<
 let map, userMarker, accuracyCircle, markers = [], spots = [], currentPosition = null, pendingCoords = null, client = null, channel = null, roomId = null, refreshTimer, syncTimer;
 let selectedTideSpotId = '', tideYearCache = new Map(), tideRenderToken = 0;
 let depthMapPicking = false, depthStart = null, depthStartSpotId = '', depthBearing = 0, depthCastLine = null, depthStartMarker = null, depthEndMarker = null;
+let depthDatasets = [], activeDepthDataset = null;
 
 const TIDE_STATION = { name:'宮津', code:'T2', lat:35 + 32 / 60, lon:135 + 12 / 60 };
 
@@ -159,7 +160,7 @@ function updateDepthCast() {
   if(!depthStart) {
     $('depthCoordinates').textContent='開始地点を選択してください';
     [depthCastLine,depthStartMarker,depthEndMarker].forEach(layer=>{if(layer&&map?.hasLayer(layer))map.removeLayer(layer);});
-    depthCastLine=depthStartMarker=depthEndMarker=null; return;
+    depthCastLine=depthStartMarker=depthEndMarker=null; renderDepthDataset(); return;
   }
   const end=destinationPoint(depthStart.lat,depthStart.lon,depthBearing);
   $('depthCoordinates').textContent=`開始 ${depthStart.lat.toFixed(5)}, ${depthStart.lon.toFixed(5)} → 100m先 ${end[0].toFixed(5)}, ${end[1].toFixed(5)} · ${compass(depthBearing)} ${depthBearing}°`;
@@ -167,6 +168,7 @@ function updateDepthCast() {
   if(depthCastLine) depthCastLine.setLatLngs(points); else depthCastLine=L.polyline(points,{className:'depth-cast-line',color:'#d8fdff',weight:4,dashArray:'8 6'}).addTo(map);
   if(depthStartMarker) depthStartMarker.setLatLng(points[0]); else depthStartMarker=L.circleMarker(points[0],{className:'depth-cast-start',radius:7,fillOpacity:1,weight:2}).addTo(map).bindTooltip('CAST LINE 始点');
   if(depthEndMarker) depthEndMarker.setLatLng(end); else depthEndMarker=L.circleMarker(end,{className:'depth-cast-handle',radius:6,fillOpacity:1,weight:2}).addTo(map).bindTooltip('100m先');
+  renderDepthDataset();
 }
 function refreshDepthSpotOptions() {
   const select=$('depthSpotSelect'); if(!select)return;
@@ -177,14 +179,53 @@ function refreshDepthSpotOptions() {
   if(!depthStart && spots.length) setDepthOrigin(spots[0].lat,spots[0].lon,spots[0].id,spots[0].name);
 }
 function initializeDepthUI() {
-  $('depthDemoProfile').addEventListener('change',()=>HINATA_DEPTH.render($('depthDrawing'),HINATA_DEPTH.sampleProfile($('depthDemoProfile').value)));
+  $('depthDemoProfile').addEventListener('change',()=>{if(!activeDepthDataset)HINATA_DEPTH.render($('depthDrawing'),HINATA_DEPTH.sampleProfile($('depthDemoProfile').value));});
   $('depthBearing').addEventListener('input',updateDepthCast);
   $('depthSpotSelect').addEventListener('change',()=>{const spot=spots.find(item=>String(item.id)===$('depthSpotSelect').value);if(spot){setDepthOrigin(spot.lat,spot.lon,spot.id,spot.name);map.setView([spot.lat,spot.lon],13);}});
   $('depthPickButton').addEventListener('click',()=>{depthMapPicking=!depthMapPicking;$('depthPickButton').classList.toggle('active',depthMapPicking);$('depthPickButton').textContent=depthMapPicking?'地図をタップして地点を指定':'地図で開始地点を選ぶ';map.getContainer().classList.toggle('depth-pick-cursor',depthMapPicking);if(depthMapPicking)document.querySelector('.map-section').scrollIntoView({behavior:'smooth'});});
   $('depthUseLocationButton').addEventListener('click',()=>{if(currentPosition)setDepthOrigin(currentPosition.lat,currentPosition.lon,'','現在地');else showInfo('現在地がありません','先に「現在地」を取得してください。');});
+  $('depthImportButton').addEventListener('click',importDepthCsv);
+  $('depthDatasetSelect').addEventListener('change',()=>selectDepthDataset($('depthDatasetSelect').value));
+  $('depthExportButton').addEventListener('click',exportDepthCsv);
+  $('depthDeleteButton').addEventListener('click',deleteDepthDataset);
   HINATA_DEPTH.render($('depthDrawing'),HINATA_DEPTH.sampleProfile('shallow'));
   refreshDepthSpotOptions();
+  refreshDepthDatasets();
 }
+
+function renderDepthDataset(){
+  const demoSelect=$('depthDemoProfile'),warning=$('depthSampleWarning'),badge=$('depthModeBadge'),status=$('depthDrawStatus');
+  if(!activeDepthDataset){if(demoSelect)demoSelect.disabled=false;if(warning)warning.hidden=false;if(badge)badge.textContent='サンプル';if(status)status.textContent='デモ地形を表示中。実際の地点の水深を表しません。';HINATA_DEPTH.render($('depthDrawing'),HINATA_DEPTH.sampleProfile(demoSelect?.value||'shallow'));return;}
+  if(demoSelect)demoSelect.disabled=true;if(warning)warning.hidden=true;if(badge)badge.textContent='実測';
+  if(!depthStart){HINATA_DEPTH.render($('depthDrawing'),{mode:'measured',points:[],segments:[]});if(status)status.textContent='キャスト開始地点を選択すると、保存済み測深点を照合します。';return;}
+  const result=HINATA_DEPTH_ANALYSIS.matchToCastLine(activeDepthDataset.points,depthStart,depthBearing);
+  HINATA_DEPTH.render($('depthDrawing'),{mode:'measured',points:result.points,segments:result.segments,verticalDatum:activeDepthDataset.vertical_datum});
+  const offset=result.points.length?` · 横距離 最大 ${Math.max(...result.points.map(p=>p.crossTrackAbsM)).toFixed(1)}m`:'';
+  if(status)status.textContent=`${activeDepthDataset.name} · CAST LINEから最大${result.policy.maxCrossTrackM}m以内（精度不明は${result.policy.minCrossTrackM}m以内）を表示 · ${result.points.length}点採用 / ${result.rejectedCount}点除外${offset} · 線の接続は間隔${result.policy.maxConnectGapM}m以内かつ水平精度${result.policy.maxConnectAccuracyM}m以内`;
+}
+function depthDatasetOptionLabel(dataset){return `${dataset.name} · ${dataset.count.toLocaleString()}点 · ${new Date(dataset.created_at).toLocaleDateString('ja-JP')}`;}
+async function refreshDepthDatasets(selectId=activeDepthDataset?.dataset_id||''){
+  try{depthDatasets=await HINATA_DEPTH_STORE.list();const select=$('depthDatasetSelect');select.innerHTML='<option value="">データセットを選択</option>';depthDatasets.forEach(dataset=>{const option=document.createElement('option');option.value=dataset.dataset_id;option.textContent=depthDatasetOptionLabel(dataset);select.appendChild(option);});const desiredId=selectId||(depthDatasets[0]?.dataset_id||'');if(desiredId&&depthDatasets.some(item=>item.dataset_id===desiredId)){select.value=desiredId;await selectDepthDataset(desiredId);}else if(!desiredId){activeDepthDataset=null;select.value='';$('depthExportButton').disabled=true;$('depthDeleteButton').disabled=true;$('depthDatasetInfo').textContent=`この保存領域に${depthDatasets.length}件のデータセットがあります。Safariとホーム画面PWAでは保存が別になる場合があります。`;renderDepthDataset();}}
+  catch(error){$('depthDatasetInfo').textContent=`端末内保存を利用できません: ${error.message}`;}
+}
+async function selectDepthDataset(id){
+  try{activeDepthDataset=id?await HINATA_DEPTH_STORE.get(id):null;}catch(error){$('depthDatasetInfo').textContent=`データセットを読み込めません: ${error.message}`;return;}
+  $('depthExportButton').disabled=!activeDepthDataset;$('depthDeleteButton').disabled=!activeDepthDataset;
+  if(activeDepthDataset){$('depthDatasetInfo').textContent=`${activeDepthDataset.name} · ${activeDepthDataset.count.toLocaleString()}点 · 鉛直基準 ${activeDepthDataset.vertical_datum||'不明'} · 端末内のみ（Safari/PWA間で共有されません）`;}
+  else{$('depthDatasetInfo').textContent=`保存データはこのブラウザの端末内に保管されます。${depthDatasets.length}件保存済み。`;}
+  renderDepthDataset();
+}
+async function importDepthCsv(){
+  const input=$('depthCsvFile'),file=input.files?.[0];if(!file){$('depthImportStatus').textContent='先にCSVファイルを選択してください。';return;}
+  if(file.size>HINATA_DEPTH_DATA.MAX_BYTES){$('depthImportStatus').textContent='ファイルは5MB以下にしてください。';return;}
+  $('depthImportButton').disabled=true;$('depthImportStatus').textContent='CSVを検証しています…';
+  try{const text=await file.text(),result=HINATA_DEPTH_DATA.parse(text,file.name);if(!result.ok){$('depthImportStatus').textContent=`取り込めませんでした（${result.errors.length}件）: ${result.errors.join(' ')}`;return;}
+    const dataset={dataset_id:crypto.randomUUID(),name:file.name,created_at:new Date().toISOString(),count:result.points.length,points:result.points,source:result.metadata.sources.join(', '),vertical_datum:result.metadata.verticalDatum,measured_at_min:result.points.map(p=>p.measured_at).filter(Boolean).sort()[0]||null,measured_at_max:result.points.map(p=>p.measured_at).filter(Boolean).sort().at(-1)||null,original_csv:text,size_bytes:file.size};
+    await HINATA_DEPTH_STORE.put(dataset);await refreshDepthDatasets(dataset.dataset_id);input.value='';$('depthImportStatus').textContent=`検証・保存しました: ${result.points.length.toLocaleString()}点。${result.warnings.length?`注意 ${result.warnings.length}件: ${result.warnings.slice(0,4).join(' ')}`:'欠測・重複エラーなし。'} データはこの端末に保存されています。`;
+  }catch(error){$('depthImportStatus').textContent=`読み込み・保存に失敗しました: ${error.message}`;}finally{$('depthImportButton').disabled=false;}
+}
+function exportDepthCsv(){if(!activeDepthDataset)return;const blob=new Blob([activeDepthDataset.original_csv],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),anchor=document.createElement('a');anchor.href=url;anchor.download=activeDepthDataset.name.replace(/[\\/:*?"<>|]/g,'_')||'depth-backup.csv';anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+async function deleteDepthDataset(){if(!activeDepthDataset)return;if(!confirm(`「${activeDepthDataset.name}」の水深データセットをこの端末から削除しますか？釣りポイントや共有ルームには影響しません。`))return;const id=activeDepthDataset.dataset_id;try{await HINATA_DEPTH_STORE.remove(id);activeDepthDataset=null;await refreshDepthDatasets();$('depthImportStatus').textContent='選択した水深データセットを端末から削除しました。釣りポイント・共有データには影響していません。';}catch(error){$('depthImportStatus').textContent=`削除できませんでした: ${error.message}`;}}
 
 function validRoomId(value){return typeof value==='string'&&/^[a-f0-9]{24,64}$/i.test(value);}
 function roomIdFromInput(value){

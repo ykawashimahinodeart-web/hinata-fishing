@@ -27,9 +27,9 @@
       <p class="attribution">地図 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors · 天気・海況 <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a> · 潮汐 <a href="https://www.jma.go.jp/jma/kishou/info/coment.html" target="_blank" rel="noreferrer">気象庁データを加工して作成</a></p>
     </section>
     <section class="depth-section" aria-labelledby="depthHeading">
-      <div class="depth-heading"><div><div class="section-kicker">HINATA DEPTH</div><h2 id="depthHeading">海底断面デモ</h2></div><span class="depth-sample-badge">サンプル</span></div>
-      <p class="depth-warning">サンプル地形・実際の水深ではありません</p>
-      <p class="depth-intro">地図で100mの投げる方向を決められます。現在、実際の水深データはありません。地図の線と下のサンプル地形は連動していません。</p>
+      <div class="depth-heading"><div><div class="section-kicker">HINATA DEPTH</div><h2 id="depthHeading">海底断面図</h2></div><span id="depthModeBadge" class="depth-sample-badge">サンプル</span></div>
+      <p id="depthSampleWarning" class="depth-warning">サンプル地形・実際の水深ではありません</p>
+      <p class="depth-intro">地図で100mの投げる方向を決められます。サンプル地形は実際の地点と連動しません。実測CSVを読み込んだ場合は、CAST LINEに近い測深点だけを表示します。</p>
       <label class="depth-field-label" for="depthSpotSelect">キャスト開始地点</label>
       <select id="depthSpotSelect" class="depth-select"><option value="">登録済みポイントから選択</option></select>
       <div class="depth-action-row"><button id="depthPickButton" class="depth-action">地図で開始地点を選ぶ</button><button id="depthUseLocationButton" class="depth-action">現在地を使う</button></div>
@@ -40,6 +40,19 @@
       <select id="depthDemoProfile" class="depth-select"><option value="shallow">遠浅サンプル</option><option value="steep">急深サンプル</option><option value="flat">平坦サンプル</option><option value="undulating">起伏サンプル</option></select>
       <div id="depthDrawing" class="depth-drawing" aria-live="polite"></div>
       <p id="depthDrawStatus" class="depth-draw-status">デモ地形を表示中。実際の地点の水深を表しません。</p>
+      <section class="depth-data-panel" aria-labelledby="depthDataHeading">
+        <div class="depth-data-heading"><h3 id="depthDataHeading">実測水深CSV</h3><span>この端末だけに保存</span></div>
+        <p class="depth-data-note">必須列：<code>latitude</code>、<code>longitude</code>、<code>depth_m</code>。例：<code>35.535,135.196,4.2</code>（列名の次の行）。UTF-8 CSVのみ対応します。Safariとホーム画面PWAの保存領域は別になる場合があります。測深データは共有ルームやSupabaseへ送信されません。</p>
+        <label class="depth-field-label" for="depthCsvFile">CSVファイル</label>
+        <input id="depthCsvFile" class="depth-file-input" type="file" accept=".csv,text/csv" aria-describedby="depthCsvHelp">
+        <small id="depthCsvHelp" class="depth-data-hint">最大5MB・20,000測深点。取り込み前に値と形式を検証します。</small>
+        <button id="depthImportButton" class="depth-action depth-import-button" type="button">CSVを検証して保存</button>
+        <p id="depthImportStatus" class="depth-import-status" role="status" aria-live="polite">CSVはまだ読み込まれていません。</p>
+        <label class="depth-field-label" for="depthDatasetSelect">保存済みデータセット</label>
+        <select id="depthDatasetSelect" class="depth-select"><option value="">データセットを選択</option></select>
+        <div class="depth-action-row"><button id="depthExportButton" class="depth-action" type="button" disabled>元CSVを書き出す</button><button id="depthDeleteButton" class="depth-action" type="button" disabled>このデータセットを削除</button></div>
+        <p id="depthDatasetInfo" class="depth-data-hint">保存データはこのブラウザの端末内に保管されます。</p>
+      </section>
     </section>
   </main>
   <nav class="bottom-nav"><button class="active"><span>⌖</span>釣り天気</button><button id="mapNav"><span>▧</span>マップ</button><button id="helpButton"><span>ⓘ</span>使い方</button></nav>
@@ -48,5 +61,5 @@
   <dialog id="hourDialog"><form method="dialog" class="dialog-card"><div class="dialog-grab"></div><div class="section-kicker">HOURLY FORECAST</div><h2 id="hourDialogTitle">時間別予報</h2><p id="hourDialogBody"></p><button class="primary-button full-button" value="close">閉じる</button></form></dialog>
   <dialog id="roomDialog"><form id="roomForm" class="dialog-card"><div class="dialog-grab"></div><div class="section-kicker">JOIN SHARED MAP</div><h2>共有リンクから参加</h2><p>この起動環境では共有ルームを特定できません。Safariで開いた共有リンクを貼り付けてください。新しいルームは作成せず、既存のポイントを読み込みます。</p><label for="roomLinkInput">共有リンクまたはルームID</label><input id="roomLinkInput" type="text" autocomplete="url" autocapitalize="off" spellcheck="false" placeholder="https://…/#room=…" required><p id="roomError" class="room-error" aria-live="polite"></p><div class="dialog-actions"><button id="roomLaterButton" class="secondary-button" type="button">あとで</button><button class="primary-button" type="submit">参加して読み込む</button></div></form></dialog>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabase-config.js"></script><script src="verdict.js"></script><script src="depth.js"></script><script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabase-config.js"></script><script src="verdict.js"></script><script src="depth-data.js"></script><script src="depth-store.js"></script><script src="depth-analysis.js"></script><script src="depth.js"></script><script src="app.js"></script>
 </body></html>
