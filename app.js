@@ -14,8 +14,9 @@ const GEBCO_WMS_LAYER = 'GEBCO_LATEST_2';
 const GEBCO_MAX_ZOOM = 12; // GEBCO 15-arcsecond grid; avoid implying finer detail.
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let map, userMarker, accuracyCircle, markers = [], spots = [], currentPosition = null, pendingCoords = null, client = null, channel = null, roomId = null, refreshTimer, syncTimer;
+let map, userMarker, accuracyCircle, markers = [], spots = [], currentPosition = null, activeWeatherPosition = null, pendingCoords = null, client = null, channel = null, roomId = null, refreshTimer, syncTimer;
 let selectedTideSpotId = '', tideYearCache = new Map(), tideRenderToken = 0;
+let selectedHomeSpotId = '';
 let depthMapPicking = false, depthStart = null, depthStartSpotId = '', depthBearing = 0, depthCastLine = null, depthStartMarker = null, depthEndMarker = null;
 let depthDatasets = [], activeDepthDataset = null;
 let lastDepthMatch = null, depthStoreFailed = false;
@@ -134,6 +135,13 @@ function updateTideSpotOptions() {
   else selectedTideSpotId = spots.length ? String(spots[0].id) : '';
   select.value = selectedTideSpotId;
   renderTide(spots.find(spot => String(spot.id) === selectedTideSpotId));
+  const homeSelect=$('homeSpotSelect');
+  if(homeSelect){
+    homeSelect.innerHTML='<option value="">現在地</option>';
+    spots.forEach(spot=>{const option=document.createElement('option');option.value=String(spot.id);option.textContent=spot.name;homeSelect.appendChild(option);});
+    if(!spots.some(spot=>String(spot.id)===selectedHomeSpotId))selectedHomeSpotId='';
+    homeSelect.value=selectedHomeSpotId;
+  }
 }
 
 function setGebcoStatus(message) {
@@ -330,7 +338,9 @@ function setLocation(lat, lon, accuracy) {
   currentPosition = { lat, lon };
   if (userMarker) userMarker.setLatLng([lat,lon]); else userMarker = L.circleMarker([lat,lon], { radius:8, color:'#fff', weight:3, fillColor:'#418cfa', fillOpacity:1 }).addTo(map).bindPopup('現在地');
   if (accuracy) { if (accuracyCircle) accuracyCircle.setLatLng([lat,lon]).setRadius(accuracy); else accuracyCircle = L.circle([lat,lon],{radius:accuracy,color:'#418cfa',weight:1,fillColor:'#418cfa',fillOpacity:.09}).addTo(map); }
-  $('locationTitle').textContent = '現在地'; $('updatedAt').textContent = 'GPS位置情報'; map.setView([lat,lon], 13); loadWeather(lat,lon);
+  if(selectedHomeSpotId){$('updatedAt').textContent='現在地を更新 · 保存ポイントを表示中';return;}
+  $('homeSpotSelect').value='';
+  $('locationTitle').textContent = '現在地'; $('updatedAt').textContent = 'GPS位置情報'; activeWeatherPosition={lat,lon}; map.setView([lat,lon], 13); loadWeather(lat,lon);
 }
 
 function locate() {
@@ -443,7 +453,7 @@ function renderSeasonalFish(spot) {
 function renderSpots() {
   if(!map) return; markers.forEach(m=>map.removeLayer(m)); markers=[]; const list=$('spotList'); list.innerHTML='';
   if(!spots.length) list.innerHTML='<div class="empty-state">地図の「ココを保存」から、仲間と共有する釣り場を追加できます。</div>';
-  spots.forEach(spot=>{const marker=L.marker([spot.lat,spot.lon]).addTo(map).bindPopup(`<strong>${esc(spot.name)}</strong><br><button data-delete="${esc(spot.id)}">この釣り場を削除</button>`);markers.push(marker);marker.on('popupopen',()=>{const b=document.querySelector(`[data-delete="${CSS.escape(spot.id)}"]`);b?.addEventListener('click',()=>removeSpot(spot.id));});const card=document.createElement('button');card.className='spot-card';card.type='button';card.innerHTML=`<span class="spot-pin">⌖</span><span class="spot-info"><strong>${esc(spot.name)}</strong><small>${Number(spot.lat).toFixed(3)}, ${Number(spot.lon).toFixed(3)} · ${esc(spot.createdLabel||'登録済み')}</small></span><span class="spot-weather">›<small>天気を見る</small></span>`;card.addEventListener('click',()=>{map.setView([spot.lat,spot.lon],13);setDepthOrigin(spot.lat,spot.lon,spot.id,spot.name);$('locationTitle').textContent=spot.name;loadWeather(spot.lat,spot.lon);renderSeasonalFish(spot);selectedTideSpotId=String(spot.id);$('tideSpotSelect').value=selectedTideSpotId;renderTide(spot);document.querySelector('.hero').scrollIntoView({behavior:'smooth'});});list.appendChild(card);});
+  spots.forEach(spot=>{const marker=L.marker([spot.lat,spot.lon]).addTo(map).bindPopup(`<strong>${esc(spot.name)}</strong><br><button data-delete="${esc(spot.id)}">この釣り場を削除</button>`);markers.push(marker);marker.on('popupopen',()=>{const b=document.querySelector(`[data-delete="${CSS.escape(spot.id)}"]`);b?.addEventListener('click',()=>removeSpot(spot.id));});const card=document.createElement('button');card.className='spot-card';card.type='button';card.innerHTML=`<span class="spot-pin">⌖</span><span class="spot-info"><strong>${esc(spot.name)}</strong><small>${Number(spot.lat).toFixed(3)}, ${Number(spot.lon).toFixed(3)} · ${esc(spot.createdLabel||'登録済み')}</small></span><span class="spot-weather">›<small>天気を見る</small></span>`;card.addEventListener('click',()=>{map.setView([spot.lat,spot.lon],13);setDepthOrigin(spot.lat,spot.lon,spot.id,spot.name);$('locationTitle').textContent=spot.name;loadWeather(spot.lat,spot.lon);selectedHomeSpotId=String(spot.id);activeWeatherPosition={lat:spot.lat,lon:spot.lon};document.getElementById('homeSpotSelect').value=selectedHomeSpotId;renderSeasonalFish(spot);selectedTideSpotId=String(spot.id);$('tideSpotSelect').value=selectedTideSpotId;renderTide(spot);document.querySelector('.hero').scrollIntoView({behavior:'smooth'});});list.appendChild(card);});
   updateTideSpotOptions(); refreshDepthSpotOptions();
 }
 function persistLocal(){localStorage.setItem(STORAGE_KEY,JSON.stringify(spots));}
@@ -491,7 +501,27 @@ async function loadSharedSpots(){if(!client||!roomId)return;const {data,error}=a
 
 async function copyShareLink(){if(!roomId){$('roomError').textContent='共有ルームが未選択です。Safariの共有リンクを貼り付けて参加してください。';if(!$('roomDialog').open)$('roomDialog').showModal();return;}try{await navigator.clipboard.writeText(location.href);$('copyLinkButton').textContent='コピーしました';setTimeout(()=>$('copyLinkButton').textContent='共有リンク',1800);}catch{showInfo('共有リンク',location.href);}}
 function showInfo(title,body){$('infoTitle').textContent=title;$('infoBody').textContent=body;$('infoDialog').showModal();}
-function bindUI(){ $('saveSpotButton').addEventListener('click',()=>{if(!roomId){$('roomDialog').showModal();return;}if(currentPosition)openSpotDialog([currentPosition.lat,currentPosition.lon]);else if(pendingCoords)openSpotDialog(pendingCoords);else showInfo('地点を選択','まず現在地を取得するか、地図をタップしてください。');}); $('confirmSave').addEventListener('click',async(e)=>{e.preventDefault();const name=$('spotName').value.trim();if(!name)return;await saveSpot(name,pendingCoords);$('spotDialog').close();}); $('locateButton').addEventListener('click',locate); $('shareButton').addEventListener('click',copyShareLink); $('copyLinkButton').addEventListener('click',copyShareLink); $('tideSpotSelect').addEventListener('change',()=>{selectedTideSpotId=$('tideSpotSelect').value;const spot=spots.find(item=>String(item.id)===selectedTideSpotId);renderTide(spot);renderSeasonalFish(spot);}); $('roomForm').addEventListener('submit',async(e)=>{e.preventDefault();const id=roomIdFromInput($('roomLinkInput').value);if(!id){$('roomError').textContent='有効な共有リンクまたはルームIDを確認してください。';return;}$('roomError').textContent='';$('roomDialog').close();await activateRoom(id);}); $('roomLaterButton').addEventListener('click',()=>$('roomDialog').close()); $('mapNav').addEventListener('click',()=>$('map').scrollIntoView({behavior:'smooth'})); $('helpButton').addEventListener('click',()=>showInfo('使い方','「ココを保存」で現在地を登録できます。地図をタップするとその地点を登録できます。共有リンクを知っている人は、同じ釣り場マップを開いてポイントを追加・削除できます。共有リンクは二人の間だけで扱ってください。天気・海況データはOpen-Meteoを使用します。潮汐は気象庁の宮津推算値を、登録済みポイントから選んで表示します。')); }
+function selectHomeSpot(id){
+  selectedHomeSpotId=id;
+  $('homeSpotSelect').value=id;
+  const spot=spots.find(item=>String(item.id)===id);
+  if(!spot){
+    $('locationTitle').textContent='現在地';
+    if(currentPosition){activeWeatherPosition={lat:currentPosition.lat,lon:currentPosition.lon};$('updatedAt').textContent='GPS位置情報';map.setView([currentPosition.lat,currentPosition.lon],13);loadWeather(currentPosition.lat,currentPosition.lon);}else locate();
+    return;
+  }
+  $('locationTitle').textContent=spot.name;$('updatedAt').textContent='保存した釣り場';activeWeatherPosition={lat:spot.lat,lon:spot.lon};
+  map.setView([spot.lat,spot.lon],13);loadWeather(spot.lat,spot.lon);
+  selectedTideSpotId=String(spot.id);$('tideSpotSelect').value=selectedTideSpotId;renderTide(spot);renderSeasonalFish(spot);
+}
+function bindMainNavigation(){
+  document.querySelectorAll('.bottom-nav [data-target]').forEach(button=>button.addEventListener('click',()=>{
+    document.querySelectorAll('.bottom-nav [data-target]').forEach(item=>{item.classList.toggle('active',item===button);if(item===button)item.setAttribute('aria-current','page');else item.removeAttribute('aria-current');});
+    document.getElementById(button.dataset.target)?.scrollIntoView({behavior:'smooth',block:'start'});
+  }));
+  $('homeSpotSelect').addEventListener('change',()=>selectHomeSpot($('homeSpotSelect').value));
+}
+function bindUI(){ $('saveSpotButton').addEventListener('click',()=>{if(!roomId){$('roomDialog').showModal();return;}if(currentPosition)openSpotDialog([currentPosition.lat,currentPosition.lon]);else if(pendingCoords)openSpotDialog(pendingCoords);else showInfo('地点を選択','まず現在地を取得するか、地図をタップしてください。');}); $('confirmSave').addEventListener('click',async(e)=>{e.preventDefault();const name=$('spotName').value.trim();if(!name)return;await saveSpot(name,pendingCoords);$('spotDialog').close();}); $('locateButton').addEventListener('click',()=>selectHomeSpot('')); $('shareButton').addEventListener('click',copyShareLink); $('copyLinkButton').addEventListener('click',copyShareLink); $('otherShareButton').addEventListener('click',copyShareLink); $('tideSpotSelect').addEventListener('change',()=>{selectedTideSpotId=$('tideSpotSelect').value;const spot=spots.find(item=>String(item.id)===selectedTideSpotId);renderTide(spot);renderSeasonalFish(spot);}); $('roomForm').addEventListener('submit',async(e)=>{e.preventDefault();const id=roomIdFromInput($('roomLinkInput').value);if(!id){$('roomError').textContent='有効な共有リンクまたはルームIDを確認してください。';return;}$('roomError').textContent='';$('roomDialog').close();await activateRoom(id);}); $('roomLaterButton').addEventListener('click',()=>$('roomDialog').close()); $('helpButton').addEventListener('click',()=>showInfo('使い方','「ココを保存」で現在地を登録できます。地図をタップするとその地点を登録できます。共有リンクを知っている人は、同じ釣り場マップを開いてポイントを追加・削除できます。共有リンクは二人の間だけで扱ってください。天気・海況データはOpen-Meteoを使用します。潮汐は気象庁の宮津推算値を、登録済みポイントから選んで表示します。')); }
 
-async function start(){initMap();bindUI();await setupSharing();initializeDepthUI();locate();navigator.serviceWorker?.register('./sw.js').catch(()=>{});refreshTimer=setInterval(()=>{const p=currentPosition;if(p)loadWeather(p.lat,p.lon);},30*60*1000);}
+async function start(){initMap();bindUI();bindMainNavigation();await setupSharing();initializeDepthUI();locate();navigator.serviceWorker?.register('./sw.js').catch(()=>{});refreshTimer=setInterval(()=>{const p=activeWeatherPosition;if(p)loadWeather(p.lat,p.lon);},30*60*1000);}
 document.addEventListener('DOMContentLoaded',start);

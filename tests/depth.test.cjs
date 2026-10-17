@@ -74,7 +74,7 @@ test('Ver 1.5 Phase 1 hides bathymetry UI while retaining CAST LINE and data mod
   assert.match(html,/depth-data\.js/);
   assert.match(html,/depth-status\.js/);
   const worker=fs.readFileSync(path.join(root,'sw.js'),'utf8');
-  assert.match(worker,/hinata-fishing-v12/);
+  assert.match(worker,/hinata-fishing-v13/);
   assert.match(worker,/seasonal-fish\.js/);
-  assert.doesNotMatch(worker,/hinata-fishing-v13/);
+  assert.doesNotMatch(worker,/hinata-fishing-v14/);
 });
