@@ -67,7 +67,7 @@ test('Ver 1.5 Phase 1 hides bathymetry UI while retaining CAST LINE and data mod
   assert.match(html,/<div class="bathymetry-control" hidden/);
   assert.match(html,/<section class="depth-status-panel"[^>]*hidden/);
   assert.match(html,/<section class="depth-section"[^>]*hidden/);
-  assert.match(html,/<section class="cast-tool" aria-labelledby="castToolHeading">/);
+  assert.match(html,/<section class="cast-tool" aria-labelledby="castToolHeading" hidden aria-hidden="true">/);
   assert.match(html,/id="castBearing"/);
   assert.match(html,/id="castCoordinates"/);
   assert.match(html,/depth-store\.js/);
