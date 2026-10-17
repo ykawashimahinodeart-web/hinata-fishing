@@ -2,10 +2,13 @@
 const SUPABASE_URL = window.HINATA_SUPABASE?.url || '';
 const SUPABASE_ANON_KEY = window.HINATA_SUPABASE?.anonKey || '';
 const STORAGE_KEY = 'hinata-fishing-spots-v1';
+// Stored separately from spot data. Safari and an installed iOS PWA may have
+// separate storage, so a missing value must lead to an invite prompt, not a new room.
+const ROOM_STORAGE_KEY = 'hinata-fishing-room-v1';
 const DEFAULT_CENTER = [35.535, 135.196]; // Miyazu, Kyoto
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let map, userMarker, accuracyCircle, markers = [], spots = [], currentPosition = null, pendingCoords = null, client = null, channel = null, roomId = null, refreshTimer;
+let map, userMarker, accuracyCircle, markers = [], spots = [], currentPosition = null, pendingCoords = null, client = null, channel = null, roomId = null, refreshTimer, syncTimer;
 
 function initMap() {
   map = L.map('map', { zoomControl:false, scrollWheelZoom:false }).setView(DEFAULT_CENTER, 10);
@@ -15,7 +18,26 @@ function initMap() {
   renderSpots(); setTimeout(() => map.invalidateSize(), 250);
 }
 
-function makeRoomId(){const bytes=new Uint8Array(32);crypto.getRandomValues(bytes);return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');}
+function validRoomId(value){return typeof value==='string'&&/^[a-f0-9]{24,64}$/i.test(value);}
+function roomIdFromInput(value){
+  const text=String(value||'').trim();
+  if(validRoomId(text))return text;
+  try{
+    const url=new URL(text,location.href);
+    const fromQuery=url.searchParams.get('room');
+    const fromHash=new URLSearchParams(url.hash.replace(/^#/, '').replace(/^room=/, 'room=')).get('room');
+    const room=fromHash||fromQuery;
+    return validRoomId(room)?room:null;
+  }catch{return null;}
+}
+function setRoomInAddress(id){
+  const url=new URL(location.href);
+  const params=new URLSearchParams(url.hash.replace(/^#/, ''));
+  params.set('room',id);
+  url.searchParams.delete('room');
+  url.hash=params.toString();
+  history.replaceState({},'',url);
+}
 
 function setLocation(lat, lon, accuracy) {
   currentPosition = { lat, lon };
@@ -99,7 +121,7 @@ function renderHourly(hours){const box=$('hourlyForecast');if(!hours.length){$('
  box.innerHTML=hours.map((p,i)=>`<button class="hour-card" type="button" data-hour="${i}" aria-label="${p.time.slice(11,16)} ${p.verdict.title}"><strong>${p.time.slice(11,16)}</strong><span class="hour-weather">${p.code==null?'--':wxLabel(p.code)}</span><span>${p.temp==null?'--':`${Math.round(p.temp)}°`}</span><small>風 ${p.wind==null?'--':`${Number(p.wind).toFixed(1)}m/s`}</small><small>瞬間 ${p.gust==null?'--':`${Number(p.gust).toFixed(1)}m/s`}</small><small>波 ${p.wave==null?'--':`${Number(p.wave).toFixed(1)}m`}</small><small>雨 ${p.precipProbability==null?'--':`${Math.round(p.precipProbability)}%`}</small><b class="hour-grade">${gradeIcon[p.verdict.grade]||'ℹ️'} ${p.verdict.grade||'--'}</b></button>`).join('');
  box.querySelectorAll('[data-hour]').forEach(button=>button.addEventListener('click',()=>{const p=hours[Number(button.dataset.hour)];$('hourDialogTitle').textContent=`${p.time.replace('T',' ')} · ${p.verdict.title}`;$('hourDialogBody').textContent=`天気 ${p.code==null?'未取得':wxLabel(p.code)} / 気温 ${p.temp==null?'--':`${Math.round(p.temp)}°C`} / 風 ${p.wind==null?'--':`${Number(p.wind).toFixed(1)}m/s`} ${p.direction==null?'':compass(p.direction)} / 最大瞬間風速 ${p.gust==null?'--':`${Number(p.gust).toFixed(1)}m/s`} / 波高 ${p.wave==null?'未取得':`${Number(p.wave).toFixed(1)}m`} / 波周期 ${p.wavePeriod==null?'未取得':`${Number(p.wavePeriod).toFixed(0)}秒`} / 降水確率 ${p.precipProbability==null?'未取得':`${Math.round(p.precipProbability)}%`} / 降水量 ${p.rain==null?'未取得':`${Number(p.rain).toFixed(1)}mm/h`}。 ${p.verdict.reason}`;$('hourDialog').showModal();}));}
 
-function openSpotDialog(coords) { $('spotCoordinates').textContent=`${coords[0].toFixed(5)}, ${coords[1].toFixed(5)}`; $('spotName').value=''; $('spotDialog').showModal(); setTimeout(()=>$('spotName').focus(),100); }
+function openSpotDialog(coords) { if(!roomId){$('roomDialog').showModal();return;} $('spotCoordinates').textContent=`${coords[0].toFixed(5)}, ${coords[1].toFixed(5)}`; $('spotName').value=''; $('spotDialog').showModal(); setTimeout(()=>$('spotName').focus(),100); }
 function renderSpots() {
   if(!map) return; markers.forEach(m=>map.removeLayer(m)); markers=[]; const list=$('spotList'); list.innerHTML='';
   if(!spots.length) list.innerHTML='<div class="empty-state">地図の「ココを保存」から、仲間と共有する釣り場を追加できます。</div>';
@@ -109,17 +131,47 @@ function persistLocal(){localStorage.setItem(STORAGE_KEY,JSON.stringify(spots));
 async function saveSpot(name,coords){const spot={id:crypto.randomUUID(),name:name.trim(),lat:coords[0],lon:coords[1],createdLabel:'登録 '+new Date().toLocaleDateString('ja-JP')};if(client&&roomId){const {error}=await client.rpc('add_spot',{p_room_id:roomId,p_name:spot.name,p_lat:spot.lat,p_lon:spot.lon});if(error){showInfo('共有保存に失敗しました','SupabaseのProject URL・anon key・SQL設定を確認してください。ポイントは保存されませんでした。');return;}await loadSharedSpots();}else{spots.unshift(spot);persistLocal();}renderSpots();}
 async function removeSpot(id){if(client&&roomId){const {error}=await client.rpc('delete_spot',{p_room_id:roomId,p_spot_id:id});if(error){showInfo('削除できませんでした','共有DBとの接続を確認してください。');return;}await loadSharedSpots();}else{spots=spots.filter(s=>s.id!==id);persistLocal();}renderSpots();}
 
-async function setupSharing(){const url=new URL(location.href);const hashParams=new URLSearchParams(url.hash.replace(/^#/,'').replace(/^room=/,'room='));roomId=hashParams.get('room')||url.searchParams.get('room');
-  if(!roomId||!/^[a-f0-9]{24,64}$/i.test(roomId))roomId=makeRoomId();
-  hashParams.set('room',roomId);url.searchParams.delete('room');url.hash=hashParams.toString();history.replaceState({},'',url);
-  if(SUPABASE_URL&&SUPABASE_ANON_KEY&&window.supabase){client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);await loadSharedSpots();$('shareStatus').classList.add('connected');$('shareStatusText').textContent='共有リンクを知る仲間と同期中';setInterval(()=>{if(document.visibilityState==='visible')loadSharedSpots();},15000);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')loadSharedSpots();});}
-  else {try{spots=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]');}catch{spots=[];} $('shareStatusText').textContent='この端末に保存中 · Supabase未設定';}
-}
-async function loadSharedSpots(){if(!client||!roomId)return;const {data,error}=await client.rpc('list_spots',{p_room_id:roomId});if(error){$('shareStatusText').textContent='共有DBに接続できません';return;}spots=data.map(s=>({...s,createdLabel:'登録 '+new Date(s.created_at).toLocaleDateString('ja-JP')}));renderSpots();}
+async function setupSharing(){
+  const url=new URL(location.href);
+  const hashParams=new URLSearchParams(url.hash.replace(/^#/,''));
+  const linkedRoom=hashParams.get('room')||url.searchParams.get('room');
+  let savedRoom=null;
+  try{savedRoom=localStorage.getItem(ROOM_STORAGE_KEY);}catch{}
+  const initialRoom=validRoomId(linkedRoom)?linkedRoom:(validRoomId(savedRoom)?savedRoom:null);
+  if(initialRoom){await activateRoom(initialRoom);return;}
 
-async function copyShareLink(){try{await navigator.clipboard.writeText(location.href);$('copyLinkButton').textContent='コピーしました';setTimeout(()=>$('copyLinkButton').textContent='共有リンク',1800);}catch{showInfo('共有リンク',location.href);}}
+  // Do not silently create a fresh room. In iOS, the installed app's manifest
+  // start_url commonly omits the #room fragment used by Safari share links.
+  $('shareStatusText').textContent='共有ルーム未選択 · 共有リンクから参加してください';
+  $('spotList').innerHTML='<div class="empty-state">共有ルームが未選択です。Safariで使っている共有リンクを「共有リンク」から貼り付けてください。保存済みポイントは変更されません。</div>';
+  $('roomDialog').showModal();
+  if(SUPABASE_URL&&SUPABASE_ANON_KEY&&window.supabase)client=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+  else {try{spots=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]');}catch{spots=[];}renderSpots();}
+}
+async function activateRoom(id){
+  if(!validRoomId(id))return false;
+  roomId=id;
+  try{localStorage.setItem(ROOM_STORAGE_KEY,id);}catch{}
+  setRoomInAddress(id);
+  if(SUPABASE_URL&&SUPABASE_ANON_KEY&&window.supabase){
+    client=client||window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+    $('shareStatus').classList.add('connected');
+    $('shareStatusText').textContent='共有リンクのルームを読み込み中…';
+    await loadSharedSpots();
+    if(!syncTimer)syncTimer=setInterval(()=>{if(document.visibilityState==='visible')loadSharedSpots();},15000);
+    document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')loadSharedSpots();});
+  }else{
+    $('shareStatusText').textContent='共有DB未設定 · 端末内の保存データを表示';
+    try{spots=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]');}catch{spots=[];}
+    renderSpots();
+  }
+  return true;
+}
+async function loadSharedSpots(){if(!client||!roomId)return;const {data,error}=await client.rpc('list_spots',{p_room_id:roomId});if(error){$('shareStatusText').textContent='共有DBに接続できません';return;}spots=(data||[]).map(s=>({...s,createdLabel:'登録 '+new Date(s.created_at).toLocaleDateString('ja-JP')}));$('shareStatusText').textContent='共有リンクを知る仲間と同期中';renderSpots();}
+
+async function copyShareLink(){if(!roomId){$('roomError').textContent='共有ルームが未選択です。Safariの共有リンクを貼り付けて参加してください。';if(!$('roomDialog').open)$('roomDialog').showModal();return;}try{await navigator.clipboard.writeText(location.href);$('copyLinkButton').textContent='コピーしました';setTimeout(()=>$('copyLinkButton').textContent='共有リンク',1800);}catch{showInfo('共有リンク',location.href);}}
 function showInfo(title,body){$('infoTitle').textContent=title;$('infoBody').textContent=body;$('infoDialog').showModal();}
-function bindUI(){ $('saveSpotButton').addEventListener('click',()=>{if(currentPosition)openSpotDialog([currentPosition.lat,currentPosition.lon]);else if(pendingCoords)openSpotDialog(pendingCoords);else showInfo('地点を選択','まず現在地を取得するか、地図をタップしてください。');}); $('confirmSave').addEventListener('click',async(e)=>{e.preventDefault();const name=$('spotName').value.trim();if(!name)return;await saveSpot(name,pendingCoords);$('spotDialog').close();}); $('locateButton').addEventListener('click',locate); $('shareButton').addEventListener('click',copyShareLink); $('copyLinkButton').addEventListener('click',copyShareLink); $('mapNav').addEventListener('click',()=>$('map').scrollIntoView({behavior:'smooth'})); $('helpButton').addEventListener('click',()=>showInfo('使い方','「ココを保存」で現在地を登録できます。地図をタップするとその地点を登録できます。共有リンクを知っている人は、同じ釣り場マップを開いてポイントを追加・削除できます。共有リンクは二人の間だけで扱ってください。天気・海況データはOpen-Meteoを使用します。潮汐情報はこの版では表示しません。')); }
+function bindUI(){ $('saveSpotButton').addEventListener('click',()=>{if(!roomId){$('roomDialog').showModal();return;}if(currentPosition)openSpotDialog([currentPosition.lat,currentPosition.lon]);else if(pendingCoords)openSpotDialog(pendingCoords);else showInfo('地点を選択','まず現在地を取得するか、地図をタップしてください。');}); $('confirmSave').addEventListener('click',async(e)=>{e.preventDefault();const name=$('spotName').value.trim();if(!name)return;await saveSpot(name,pendingCoords);$('spotDialog').close();}); $('locateButton').addEventListener('click',locate); $('shareButton').addEventListener('click',copyShareLink); $('copyLinkButton').addEventListener('click',copyShareLink); $('roomForm').addEventListener('submit',async(e)=>{e.preventDefault();const id=roomIdFromInput($('roomLinkInput').value);if(!id){$('roomError').textContent='有効な共有リンクまたはルームIDを確認してください。';return;}$('roomError').textContent='';$('roomDialog').close();await activateRoom(id,{fromLink:true});}); $('roomLaterButton').addEventListener('click',()=>$('roomDialog').close()); $('mapNav').addEventListener('click',()=>$('map').scrollIntoView({behavior:'smooth'})); $('helpButton').addEventListener('click',()=>showInfo('使い方','「ココを保存」で現在地を登録できます。地図をタップするとその地点を登録できます。共有リンクを知っている人は、同じ釣り場マップを開いてポイントを追加・削除できます。共有リンクは二人の間だけで扱ってください。天気・海況データはOpen-Meteoを使用します。潮汐情報はこの版では表示しません。')); }
 
 async function start(){initMap();bindUI();await setupSharing();locate();navigator.serviceWorker?.register('./sw.js').catch(()=>{});refreshTimer=setInterval(()=>{const p=currentPosition;if(p)loadWeather(p.lat,p.lon);},30*60*1000);}
 document.addEventListener('DOMContentLoaded',start);
