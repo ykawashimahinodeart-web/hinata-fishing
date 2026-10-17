@@ -18,7 +18,8 @@ let map, userMarker, accuracyCircle, markers = [], spots = [], currentPosition =
 let selectedTideSpotId = '', tideYearCache = new Map(), tideRenderToken = 0;
 let depthMapPicking = false, depthStart = null, depthStartSpotId = '', depthBearing = 0, depthCastLine = null, depthStartMarker = null, depthEndMarker = null;
 let depthDatasets = [], activeDepthDataset = null;
-let gebcoBathymetryLayer = null, gebcoBathymetryEnabled = false, gebcoTileFailed = false;
+let lastDepthMatch = null, depthStoreFailed = false;
+let gebcoBathymetryLayer = null, gebcoBathymetryEnabled = false, gebcoTileFailed = false, gebcoRequestState = 'unverified';
 
 const TIDE_STATION = { name:'宮津', code:'T2', lat:35 + 32 / 60, lon:135 + 12 / 60 };
 
@@ -140,6 +141,14 @@ function setGebcoStatus(message) {
   if (status) status.textContent = message;
 }
 
+function renderDepthDataStatus() {
+  const box=$('depthDataStatus'); if(!box||!window.HINATA_DEPTH_STATUS)return;
+  const precision=HINATA_DEPTH_STATUS.precisionStatus(lastDepthMatch,!!activeDepthDataset);
+  const csv=HINATA_DEPTH_STATUS.csvStatus({match:activeDepthDataset?lastDepthMatch:null,datasetCount:depthDatasets.length,error:depthStoreFailed});
+  const gebco=HINATA_DEPTH_STATUS.gebcoStatus({online:navigator.onLine,enabled:gebcoBathymetryEnabled,zoomAllowed:!!map&&map.getZoom()<=GEBCO_MAX_ZOOM,state:gebcoRequestState});
+  box.innerHTML=`<div class="depth-source-status"><b>広域水深（GEBCO）</b><strong>${esc(gebco.label)}</strong><span>${esc(gebco.detail)}</span></div><div class="depth-source-status"><b>100m精密断面（実測照合）</b><strong>${esc(precision.label)}</strong><span>${esc(precision.detail)} ${activeDepthDataset?`使用中：${esc(activeDepthDataset.name)}（${esc(activeDepthDataset.vertical_datum||'鉛直基準不明')}）`:'実測データセット未選択'}</span></div><div class="depth-source-status"><b>端末内CSV測深データ</b><strong>${esc(csv.label)}</strong><span>${esc(csv.detail)} ${activeDepthDataset?`照合対象：${esc(activeDepthDataset.name)}`:''}</span></div><p class="depth-status-note">GEBCOは広域参考画像で、個別地点の測深確認や100m断面には使用しません。CSVはこの端末内のみで、Safariとホーム画面PWAの保存領域は別の場合があります。${!activeDepthDataset&&depthDatasets.length?' データセットを選択すると断面への適合を確認します。':''}</p>`;
+}
+
 function syncGebcoBathymetry() {
   if (!map || !gebcoBathymetryLayer) return;
   const canShow = gebcoBathymetryEnabled && map.getZoom() <= GEBCO_MAX_ZOOM;
@@ -147,8 +156,10 @@ function syncGebcoBathymetry() {
   if (!canShow && map.hasLayer(gebcoBathymetryLayer)) map.removeLayer(gebcoBathymetryLayer);
   if (!gebcoBathymetryEnabled) setGebcoStatus('OFF');
   else if (map.getZoom() > GEBCO_MAX_ZOOM) setGebcoStatus(`ON · ズーム${GEBCO_MAX_ZOOM}以下で表示`);
-  else if (gebcoTileFailed) setGebcoStatus('取得できません · 地図は利用できます');
-  else setGebcoStatus('表示中 · 広域参考データ');
+  else if (gebcoRequestState==='error') setGebcoStatus('取得できません · 地図は利用できます');
+  else if (gebcoRequestState==='available') setGebcoStatus('表示中 · 広域参考データ');
+  else setGebcoStatus('確認中 · GEBCO WMS');
+  renderDepthDataStatus();
 }
 
 function initGebcoBathymetry() {
@@ -163,20 +174,25 @@ function initGebcoBathymetry() {
     opacity: 0.62,
     attribution: 'GEBCO_2026 Grid · GEBCO Bathymetric Compilation Group (2026)'
   });
-  gebcoBathymetryLayer.on('loading', () => { gebcoTileFailed = false; });
+  gebcoBathymetryLayer.on('loading', () => { gebcoTileFailed = false; gebcoRequestState='loading'; renderDepthDataStatus(); });
+  gebcoBathymetryLayer.on('tileload', () => { if(!gebcoTileFailed)gebcoRequestState='available'; renderDepthDataStatus(); });
   gebcoBathymetryLayer.on('tileerror', () => {
     gebcoTileFailed = true;
+    gebcoRequestState='error'; renderDepthDataStatus();
     if (gebcoBathymetryEnabled && map.getZoom() <= GEBCO_MAX_ZOOM) syncGebcoBathymetry();
   });
   gebcoBathymetryLayer.on('load', () => {
+    if(gebcoBathymetryEnabled&&!gebcoTileFailed)gebcoRequestState='available';
     if (gebcoBathymetryEnabled) syncGebcoBathymetry();
   });
   $('gebcoBathymetryToggle').addEventListener('change', event => {
     gebcoBathymetryEnabled = event.target.checked;
-    gebcoTileFailed = false;
+    gebcoTileFailed = false; gebcoRequestState='unverified';
     syncGebcoBathymetry();
   });
   map.on('zoomend', syncGebcoBathymetry);
+  window.addEventListener('online',()=>{gebcoRequestState='unverified';if(gebcoBathymetryEnabled)gebcoBathymetryLayer?.redraw();renderDepthDataStatus();});
+  window.addEventListener('offline',()=>{gebcoRequestState='error';renderDepthDataStatus();});
 }
 
 function initMap() {
@@ -244,21 +260,22 @@ function initializeDepthUI() {
 
 function renderDepthDataset(){
   const demoSelect=$('depthDemoProfile'),warning=$('depthSampleWarning'),badge=$('depthModeBadge'),status=$('depthDrawStatus');
-  if(!activeDepthDataset){if(demoSelect)demoSelect.disabled=false;if(warning)warning.hidden=false;if(badge)badge.textContent='サンプル';if(status)status.textContent='デモ地形を表示中。実際の地点の水深を表しません。';HINATA_DEPTH.render($('depthDrawing'),HINATA_DEPTH.sampleProfile(demoSelect?.value||'shallow'));return;}
+  if(!activeDepthDataset){lastDepthMatch=null;if(demoSelect)demoSelect.disabled=false;if(warning)warning.hidden=false;if(badge)badge.textContent='サンプル';if(status)status.textContent='デモ地形を表示中。実際の地点の水深を表しません。';HINATA_DEPTH.render($('depthDrawing'),HINATA_DEPTH.sampleProfile(demoSelect?.value||'shallow'));renderDepthDataStatus();return;}
   if(demoSelect)demoSelect.disabled=true;if(warning)warning.hidden=true;if(badge)badge.textContent='実測';
-  if(!depthStart){HINATA_DEPTH.render($('depthDrawing'),{mode:'measured',points:[],segments:[]});if(status)status.textContent='キャスト開始地点を選択すると、保存済み測深点を照合します。';return;}
-  const result=HINATA_DEPTH_ANALYSIS.matchToCastLine(activeDepthDataset.points,depthStart,depthBearing);
+  if(!depthStart){lastDepthMatch=null;HINATA_DEPTH.render($('depthDrawing'),{mode:'measured',points:[],segments:[]});if(status)status.textContent='キャスト開始地点を選択すると、保存済み測深点を照合します。';renderDepthDataStatus();return;}
+  const result=HINATA_DEPTH_ANALYSIS.matchToCastLine(activeDepthDataset.points,depthStart,depthBearing);lastDepthMatch=result;
   HINATA_DEPTH.render($('depthDrawing'),{mode:'measured',points:result.points,segments:result.segments,verticalDatum:activeDepthDataset.vertical_datum});
   const offset=result.points.length?` · 横距離 最大 ${Math.max(...result.points.map(p=>p.crossTrackAbsM)).toFixed(1)}m`:'';
   if(status)status.textContent=`${activeDepthDataset.name} · CAST LINEから最大${result.policy.maxCrossTrackM}m以内（精度不明は${result.policy.minCrossTrackM}m以内）を表示 · ${result.points.length}点採用 / ${result.rejectedCount}点除外${offset} · 線の接続は間隔${result.policy.maxConnectGapM}m以内かつ水平精度${result.policy.maxConnectAccuracyM}m以内`;
+  renderDepthDataStatus();
 }
 function depthDatasetOptionLabel(dataset){return `${dataset.name} · ${dataset.count.toLocaleString()}点 · ${new Date(dataset.created_at).toLocaleDateString('ja-JP')}`;}
 async function refreshDepthDatasets(selectId=activeDepthDataset?.dataset_id||''){
-  try{depthDatasets=await HINATA_DEPTH_STORE.list();const select=$('depthDatasetSelect');select.innerHTML='<option value="">データセットを選択</option>';depthDatasets.forEach(dataset=>{const option=document.createElement('option');option.value=dataset.dataset_id;option.textContent=depthDatasetOptionLabel(dataset);select.appendChild(option);});const desiredId=selectId||(depthDatasets[0]?.dataset_id||'');if(desiredId&&depthDatasets.some(item=>item.dataset_id===desiredId)){select.value=desiredId;await selectDepthDataset(desiredId);}else if(!desiredId){activeDepthDataset=null;select.value='';$('depthExportButton').disabled=true;$('depthDeleteButton').disabled=true;$('depthDatasetInfo').textContent=`この保存領域に${depthDatasets.length}件のデータセットがあります。Safariとホーム画面PWAでは保存が別になる場合があります。`;renderDepthDataset();}}
-  catch(error){$('depthDatasetInfo').textContent=`端末内保存を利用できません: ${error.message}`;}
+  try{depthStoreFailed=false;depthDatasets=await HINATA_DEPTH_STORE.list();const select=$('depthDatasetSelect');select.innerHTML='<option value="">データセットを選択</option>';depthDatasets.forEach(dataset=>{const option=document.createElement('option');option.value=dataset.dataset_id;option.textContent=depthDatasetOptionLabel(dataset);select.appendChild(option);});const desiredId=selectId||(depthDatasets[0]?.dataset_id||'');if(desiredId&&depthDatasets.some(item=>item.dataset_id===desiredId)){select.value=desiredId;await selectDepthDataset(desiredId);}else if(!desiredId){activeDepthDataset=null;select.value='';$('depthExportButton').disabled=true;$('depthDeleteButton').disabled=true;$('depthDatasetInfo').textContent=`この保存領域に${depthDatasets.length}件のデータセットがあります。Safariとホーム画面PWAでは保存が別になる場合があります。`;renderDepthDataset();}}
+  catch(error){depthStoreFailed=true;$('depthDatasetInfo').textContent=`端末内保存を利用できません: ${error.message}`;renderDepthDataStatus();}
 }
 async function selectDepthDataset(id){
-  try{activeDepthDataset=id?await HINATA_DEPTH_STORE.get(id):null;}catch(error){$('depthDatasetInfo').textContent=`データセットを読み込めません: ${error.message}`;return;}
+  try{depthStoreFailed=false;activeDepthDataset=id?await HINATA_DEPTH_STORE.get(id):null;}catch(error){depthStoreFailed=true;activeDepthDataset=null;lastDepthMatch=null;$('depthDatasetInfo').textContent=`データセットを読み込めません: ${error.message}`;renderDepthDataset();return;}
   $('depthExportButton').disabled=!activeDepthDataset;$('depthDeleteButton').disabled=!activeDepthDataset;
   if(activeDepthDataset){$('depthDatasetInfo').textContent=`${activeDepthDataset.name} · ${activeDepthDataset.count.toLocaleString()}点 · 鉛直基準 ${activeDepthDataset.vertical_datum||'不明'} · 端末内のみ（Safari/PWA間で共有されません）`;}
   else{$('depthDatasetInfo').textContent=`保存データはこのブラウザの端末内に保管されます。${depthDatasets.length}件保存済み。`;}
@@ -383,7 +400,7 @@ function openSpotDialog(coords) { if(!roomId){$('roomDialog').showModal();return
 function renderSpots() {
   if(!map) return; markers.forEach(m=>map.removeLayer(m)); markers=[]; const list=$('spotList'); list.innerHTML='';
   if(!spots.length) list.innerHTML='<div class="empty-state">地図の「ココを保存」から、仲間と共有する釣り場を追加できます。</div>';
-  spots.forEach(spot=>{const marker=L.marker([spot.lat,spot.lon]).addTo(map).bindPopup(`<strong>${esc(spot.name)}</strong><br><button data-delete="${esc(spot.id)}">この釣り場を削除</button>`);markers.push(marker);marker.on('popupopen',()=>{const b=document.querySelector(`[data-delete="${CSS.escape(spot.id)}"]`);b?.addEventListener('click',()=>removeSpot(spot.id));});const card=document.createElement('button');card.className='spot-card';card.type='button';card.innerHTML=`<span class="spot-pin">⌖</span><span class="spot-info"><strong>${esc(spot.name)}</strong><small>${Number(spot.lat).toFixed(3)}, ${Number(spot.lon).toFixed(3)} · ${esc(spot.createdLabel||'登録済み')}</small></span><span class="spot-weather">›<small>天気を見る</small></span>`;card.addEventListener('click',()=>{map.setView([spot.lat,spot.lon],13);$('locationTitle').textContent=spot.name;loadWeather(spot.lat,spot.lon);selectedTideSpotId=String(spot.id);$('tideSpotSelect').value=selectedTideSpotId;renderTide(spot);document.querySelector('.hero').scrollIntoView({behavior:'smooth'});});list.appendChild(card);});
+  spots.forEach(spot=>{const marker=L.marker([spot.lat,spot.lon]).addTo(map).bindPopup(`<strong>${esc(spot.name)}</strong><br><button data-delete="${esc(spot.id)}">この釣り場を削除</button>`);markers.push(marker);marker.on('popupopen',()=>{const b=document.querySelector(`[data-delete="${CSS.escape(spot.id)}"]`);b?.addEventListener('click',()=>removeSpot(spot.id));});const card=document.createElement('button');card.className='spot-card';card.type='button';card.innerHTML=`<span class="spot-pin">⌖</span><span class="spot-info"><strong>${esc(spot.name)}</strong><small>${Number(spot.lat).toFixed(3)}, ${Number(spot.lon).toFixed(3)} · ${esc(spot.createdLabel||'登録済み')}</small></span><span class="spot-weather">›<small>天気を見る</small></span>`;card.addEventListener('click',()=>{map.setView([spot.lat,spot.lon],13);setDepthOrigin(spot.lat,spot.lon,spot.id,spot.name);$('locationTitle').textContent=spot.name;loadWeather(spot.lat,spot.lon);selectedTideSpotId=String(spot.id);$('tideSpotSelect').value=selectedTideSpotId;renderTide(spot);document.querySelector('.hero').scrollIntoView({behavior:'smooth'});});list.appendChild(card);});
   updateTideSpotOptions(); refreshDepthSpotOptions();
 }
 function persistLocal(){localStorage.setItem(STORAGE_KEY,JSON.stringify(spots));}

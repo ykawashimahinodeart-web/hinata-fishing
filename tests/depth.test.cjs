@@ -39,3 +39,25 @@ test('measured renderer draws discrete points and no seabed where there is no qu
   assert.match(container.innerHTML,/実測点/);assert.match(container.innerHTML,/depth-measured-point/);assert.doesNotMatch(container.innerHTML,/depth-measured-fill/);assert.doesNotMatch(container.innerHTML,/depth-sand/);
   context.HINATA_DEPTH.render(container,{mode:'measured',points:[],segments:[]});assert.match(container.innerHTML,/海底線・海底塗りつぶしは表示していません/);
 });
+
+test('data source status never treats configuration alone as a GEBCO response', () => {
+  const context=browserContext();loadScript('depth-status.js',context);const status=context.HINATA_DEPTH_STATUS;
+  assert.match(status.gebcoStatus({enabled:false,state:'unverified'}).label,/OFF/);
+  assert.match(status.gebcoStatus({enabled:true,zoomAllowed:true,state:'unverified'}).label,/未確認/);
+  assert.match(status.gebcoStatus({enabled:true,zoomAllowed:true,state:'available'}).label,/WMS応答あり/);
+  assert.match(status.gebcoStatus({enabled:true,zoomAllowed:true,state:'error'}).label,/通信エラー/);
+  assert.match(status.gebcoStatus({online:false,enabled:true,state:'available'}).label,/オフライン/);
+});
+
+test('precision and local CSV statuses distinguish measured points, qualified segments and missing matches', () => {
+  const context=browserContext();loadScript('depth-status.js',context);const status=context.HINATA_DEPTH_STATUS;
+  assert.match(status.precisionStatus(null,false).label,/十分な実測データなし/);
+  assert.match(status.precisionStatus(null,true).label,/未確認/);
+  assert.match(status.precisionStatus({points:[{}],segments:[]}).label,/実測点あり/);
+  assert.match(status.precisionStatus({points:[{},{}],segments:[[{},{}]]}).label,/一部区間のみ/);
+  assert.match(status.precisionStatus({points:[],segments:[]}).label,/十分な実測データなし/);
+  assert.match(status.csvStatus({datasetCount:0}).label,/データなし/);
+  assert.match(status.csvStatus({datasetCount:1,match:{points:[],segments:[]}}).label,/対象外/);
+  assert.match(status.csvStatus({datasetCount:1,match:{points:[{}],segments:[]}}).label,/対象地点付近/);
+  assert.match(status.csvStatus({datasetCount:1,error:true}).label,/読み込みエラー/);
+});
