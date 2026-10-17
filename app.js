@@ -9,12 +9,16 @@ const APP_BASE_URL = new URL('.', document.currentScript?.src || location.href);
 // separate storage, so a missing value must lead to an invite prompt, not a new room.
 const ROOM_STORAGE_KEY = 'hinata-fishing-room-v1';
 const DEFAULT_CENTER = [35.535, 135.196]; // Miyazu, Kyoto
+const GEBCO_WMS_URL = 'https://wms.gebco.net/mapserv?';
+const GEBCO_WMS_LAYER = 'GEBCO_LATEST_2';
+const GEBCO_MAX_ZOOM = 12; // GEBCO 15-arcsecond grid; avoid implying finer detail.
 const $ = (id) => document.getElementById(id);
 const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let map, userMarker, accuracyCircle, markers = [], spots = [], currentPosition = null, pendingCoords = null, client = null, channel = null, roomId = null, refreshTimer, syncTimer;
 let selectedTideSpotId = '', tideYearCache = new Map(), tideRenderToken = 0;
 let depthMapPicking = false, depthStart = null, depthStartSpotId = '', depthBearing = 0, depthCastLine = null, depthStartMarker = null, depthEndMarker = null;
 let depthDatasets = [], activeDepthDataset = null;
+let gebcoBathymetryLayer = null, gebcoBathymetryEnabled = false, gebcoTileFailed = false;
 
 const TIDE_STATION = { name:'宮津', code:'T2', lat:35 + 32 / 60, lon:135 + 12 / 60 };
 
@@ -131,10 +135,55 @@ function updateTideSpotOptions() {
   renderTide(spots.find(spot => String(spot.id) === selectedTideSpotId));
 }
 
+function setGebcoStatus(message) {
+  const status = $('gebcoBathymetryStatus');
+  if (status) status.textContent = message;
+}
+
+function syncGebcoBathymetry() {
+  if (!map || !gebcoBathymetryLayer) return;
+  const canShow = gebcoBathymetryEnabled && map.getZoom() <= GEBCO_MAX_ZOOM;
+  if (canShow && !map.hasLayer(gebcoBathymetryLayer)) gebcoBathymetryLayer.addTo(map);
+  if (!canShow && map.hasLayer(gebcoBathymetryLayer)) map.removeLayer(gebcoBathymetryLayer);
+  if (!gebcoBathymetryEnabled) setGebcoStatus('OFF');
+  else if (map.getZoom() > GEBCO_MAX_ZOOM) setGebcoStatus(`ON · ズーム${GEBCO_MAX_ZOOM}以下で表示`);
+  else if (gebcoTileFailed) setGebcoStatus('取得できません · 地図は利用できます');
+  else setGebcoStatus('表示中 · 広域参考データ');
+}
+
+function initGebcoBathymetry() {
+  if (!$('gebcoBathymetryToggle')) return;
+  gebcoBathymetryLayer = L.tileLayer.wms(GEBCO_WMS_URL, {
+    layers: GEBCO_WMS_LAYER,
+    version: '1.3.0',
+    format: 'image/png',
+    transparent: true,
+    crs: L.CRS.EPSG3857,
+    maxZoom: GEBCO_MAX_ZOOM,
+    opacity: 0.62,
+    attribution: 'GEBCO_2026 Grid · GEBCO Bathymetric Compilation Group (2026)'
+  });
+  gebcoBathymetryLayer.on('loading', () => { gebcoTileFailed = false; });
+  gebcoBathymetryLayer.on('tileerror', () => {
+    gebcoTileFailed = true;
+    if (gebcoBathymetryEnabled && map.getZoom() <= GEBCO_MAX_ZOOM) syncGebcoBathymetry();
+  });
+  gebcoBathymetryLayer.on('load', () => {
+    if (gebcoBathymetryEnabled) syncGebcoBathymetry();
+  });
+  $('gebcoBathymetryToggle').addEventListener('change', event => {
+    gebcoBathymetryEnabled = event.target.checked;
+    gebcoTileFailed = false;
+    syncGebcoBathymetry();
+  });
+  map.on('zoomend', syncGebcoBathymetry);
+}
+
 function initMap() {
   map = L.map('map', { zoomControl:false, scrollWheelZoom:false }).setView(DEFAULT_CENTER, 10);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'&copy; OpenStreetMap' }).addTo(map);
   L.control.zoom({ position:'topright' }).addTo(map);
+  initGebcoBathymetry();
   map.on('click', (event) => {
     if (depthMapPicking) { setDepthOrigin(event.latlng.lat, event.latlng.lng, '', '地図で選択した地点'); $('depthPickButton').classList.remove('active'); $('depthPickButton').textContent='地図で開始地点を選ぶ'; depthMapPicking=false; map.getContainer().classList.remove('depth-pick-cursor'); return; }
     pendingCoords = [event.latlng.lat, event.latlng.lng]; openSpotDialog(pendingCoords);

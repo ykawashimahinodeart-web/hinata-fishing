@@ -21,6 +21,7 @@
       <p class="safety-note">海況予報は目安です。現地の状況と気象警報を確認し、安全を最優先してください。</p>
     </section>
     <section class="map-section"><div class="section-heading"><div><div class="section-kicker">YOUR FISHING SPOTS</div><h2>釣り場マップ</h2></div><button id="locateButton" class="text-button">◎ 現在地</button></div>
+      <div class="bathymetry-control"><label class="bathymetry-toggle"><input id="gebcoBathymetryToggle" type="checkbox"><span>広域水深</span></label><span id="gebcoBathymetryStatus" class="bathymetry-status" aria-live="polite">OFF</span><p>GEBCO_2026・15秒格子の広域参考データです。100m断面には非対応。精密測深や航行安全の判断には使用しないでください。</p><small>出典：<a href="https://doi.org/10.5285/4f68d5c7-45eb-f999-e063-7086abc036fa" target="_blank" rel="noreferrer">GEBCO Bathymetric Compilation Group 2026 (2026), GEBCO_2026 Grid</a> · <a href="https://www.gebco.net/data-products/gridded-bathymetry/terms-of-use" target="_blank" rel="noreferrer">利用条件</a></small></div>
       <div class="map-wrap"><div id="map" aria-label="釣り場の地図"></div><button id="saveSpotButton" class="save-button"><span>＋</span> ココを保存</button></div>
       <div class="share-status" id="shareStatus"><span class="status-dot"></span><span id="shareStatusText">この端末に保存中</span><button id="copyLinkButton">共有リンク</button></div>
       <div class="spot-list" id="spotList"></div>
